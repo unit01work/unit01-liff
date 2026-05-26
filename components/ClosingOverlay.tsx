@@ -12,7 +12,19 @@ export function ClosingOverlay({
   onReset: () => void;
 }) {
   useEffect(() => {
-    const t = setTimeout(onReset, 4000);
+    const t = setTimeout(async () => {
+      try {
+        const liff = (await import("@line/liff")).default;
+        if (liff.isInClient()) {
+          liff.closeWindow();
+          return;
+        }
+      } catch {
+        // not in LIFF client
+      }
+      // fallback: reset to products screen if not in LIFF
+      onReset();
+    }, 2500);
     return () => clearTimeout(t);
   }, [onReset]);
   return (

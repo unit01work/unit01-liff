@@ -16,6 +16,7 @@ export default function ShopPage() {
   const [screen, setScreen] = useState<Screen>("products");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orderNo, setOrderNo] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   const addToCart = useCallback((p: Product, v: Variant) => {
     setCart((prev) => {
@@ -53,6 +54,9 @@ export default function ShopPage() {
 
   const handleConfirm = useCallback(
     async (form: ShippingInfo) => {
+      if (submitting) return;
+      setSubmitting(true);
+
       try {
         const res = await fetch("/api/order", {
           method: "POST",
@@ -74,12 +78,11 @@ export default function ShopPage() {
         if (!res.ok) {
           console.error("Order API error:", data);
           alert("เกิดข้อผิดพลาด กรุณาลองใหม่");
+          setSubmitting(false);
           return;
         }
 
-        setOrderNo(data.orderId);
-        setScreen("closing");
-
+        // Send order summary to LINE Chat via liff.sendMessages (single source)
         try {
           const liff = (await import("@line/liff")).default;
           if (liff.isInClient()) {
@@ -90,12 +93,16 @@ export default function ShopPage() {
         } catch (liffErr) {
           console.log("LIFF sendMessages skipped:", liffErr);
         }
+
+        setOrderNo(data.orderId);
+        setScreen("closing");
       } catch (err) {
         console.error("Order submit error:", err);
         alert("เกิดข้อผิดพลาด กรุณาลองใหม่");
+        setSubmitting(false);
       }
     },
-    [cart, profile]
+    [cart, profile, submitting]
   );
 
   const handleReset = useCallback(async () => {

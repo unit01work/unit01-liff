@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useCallback } from "react";
 import { C, FM, FT, fmt } from "@/lib/tokens";
 import { BackIcon } from "./Icons";
 import { SectHead, BracketChain } from "./MicroGraphics";
@@ -12,6 +12,72 @@ export interface ShippingInfo {
   address: string;
   city: string;
   zip: string;
+}
+
+/* Field component defined OUTSIDE to prevent re-creation on every render */
+function Fld({
+  label,
+  field,
+  ph,
+  area,
+  value,
+  error,
+  onChange,
+}: {
+  label: string;
+  field: string;
+  ph: string;
+  area?: boolean;
+  value: string;
+  error: boolean;
+  onChange: (field: string, value: string) => void;
+}) {
+  const style: React.CSSProperties = {
+    background: C.white,
+    color: C.mist,
+    border: `1px solid ${error ? C.err : C.bdr}`,
+    padding: "16px 14px",
+    borderRadius: 2,
+    fontFamily: FT,
+    fontSize: 16,
+    lineHeight: 1.3,
+    outline: "none",
+    width: "100%",
+    boxSizing: "border-box",
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <label
+        style={{
+          fontFamily: FM,
+          fontSize: 10,
+          letterSpacing: "0.14em",
+          textTransform: "uppercase",
+          color: C.oliva,
+          fontWeight: 500,
+        }}
+      >
+        {label}
+      </label>
+      {area ? (
+        <textarea
+          value={value}
+          onChange={(e) => onChange(field, e.target.value)}
+          placeholder={ph}
+          rows={3}
+          style={{ ...style, resize: "none" }}
+        />
+      ) : (
+        <input
+          value={value}
+          onChange={(e) => onChange(field, e.target.value)}
+          placeholder={ph}
+          style={style}
+        />
+      )}
+    </div>
+  );
 }
 
 export function ScreenShipping({
@@ -33,10 +99,10 @@ export function ScreenShipping({
   const [err, setErr] = useState<Record<string, boolean>>({});
   const sub = cart.reduce((s, c) => s + c.price * c.qty, 0);
 
-  const upd = (k: string, v: string) => {
+  const upd = useCallback((k: string, v: string) => {
     setForm((p) => ({ ...p, [k]: v }));
-    if (err[k]) setErr((p) => ({ ...p, [k]: false }));
-  };
+    setErr((p) => (p[k] ? { ...p, [k]: false } : p));
+  }, []);
 
   const validate = () => {
     const e: Record<string, boolean> = {};
@@ -50,63 +116,6 @@ export function ScreenShipping({
   const submit = () => {
     if (validate()) onConfirm(form);
   };
-
-  const inp = (f: string): React.CSSProperties => ({
-    background: C.white,
-    color: C.mist,
-    border: `1px solid ${err[f] ? C.err : C.bdr}`,
-    padding: "16px 14px",
-    borderRadius: 2,
-    fontFamily: FT,
-    fontSize: 16,
-    lineHeight: 1.3,
-    outline: "none",
-    width: "100%",
-    boxSizing: "border-box",
-  });
-
-  const Fld = ({
-    label,
-    field,
-    ph,
-    area,
-  }: {
-    label: string;
-    field: string;
-    ph: string;
-    area?: boolean;
-  }) => (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <label
-        style={{
-          fontFamily: FM,
-          fontSize: 10,
-          letterSpacing: "0.14em",
-          textTransform: "uppercase",
-          color: C.oliva,
-          fontWeight: 500,
-        }}
-      >
-        {label}
-      </label>
-      {area ? (
-        <textarea
-          value={form[field as keyof ShippingInfo]}
-          onChange={(e) => upd(field, e.target.value)}
-          placeholder={ph}
-          rows={3}
-          style={{ ...inp(field), resize: "none" }}
-        />
-      ) : (
-        <input
-          value={form[field as keyof ShippingInfo]}
-          onChange={(e) => upd(field, e.target.value)}
-          placeholder={ph}
-          style={inp(field)}
-        />
-      )}
-    </div>
-  );
 
   return (
     <>
@@ -206,12 +215,12 @@ export function ScreenShipping({
             gap: 20,
           }}
         >
-          <Fld label="FULL NAME" field="name" ph="Trai Nimtawat" />
-          <Fld label="PHONE NUMBER" field="phone" ph="081 234 5678" />
-          <Fld label="SHIPPING ADDRESS" field="address" ph="99/1 Sukhumvit Rd, Khlong Toei" area />
+          <Fld label="FULL NAME" field="name" ph="Trai Nimtawat" value={form.name} error={!!err.name} onChange={upd} />
+          <Fld label="PHONE NUMBER" field="phone" ph="081 234 5678" value={form.phone} error={!!err.phone} onChange={upd} />
+          <Fld label="SHIPPING ADDRESS" field="address" ph="99/1 Sukhumvit Rd, Khlong Toei" area value={form.address} error={!!err.address} onChange={upd} />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Fld label="CITY / PROVINCE" field="city" ph="Bangkok" />
-            <Fld label="POSTAL CODE" field="zip" ph="10110" />
+            <Fld label="CITY / PROVINCE" field="city" ph="Bangkok" value={form.city} error={!!err.city} onChange={upd} />
+            <Fld label="POSTAL CODE" field="zip" ph="10110" value={form.zip} error={!!err.zip} onChange={upd} />
           </div>
         </div>
 
