@@ -1,5 +1,5 @@
 export const C = {
-  cream: "#F4EFEC",
+  cream: "#FFFFFF",
   light: "#E6E0DE",
   gris: "#696969",
   oliva: "#3A3A3A",

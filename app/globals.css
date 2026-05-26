@@ -9,7 +9,7 @@
 }
 
 :root {
-  --background: #F4EFEC;
+  --background: #FFFFFF;
   --foreground: #191919;
 }
 
@@ -20,7 +20,7 @@
 body {
   margin: 0;
   padding: 0;
-  background: #F4EFEC;
+  background: #FFFFFF;
   color: #191919;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
