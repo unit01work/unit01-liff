@@ -24,7 +24,7 @@ export function ClosingOverlay({
       }
       // fallback: reset to products screen if not in LIFF
       onReset();
-    }, 2500);
+    }, 1000);
     return () => clearTimeout(t);
   }, [onReset]);
   return (

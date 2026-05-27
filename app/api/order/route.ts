@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getLineClient } from "@/lib/line";
 
 interface CartItem {
   name: string;
@@ -73,8 +74,24 @@ export async function POST(request: NextRequest) {
     console.log("Shipping:", JSON.stringify(body.shipping, null, 2));
     console.log("=================");
 
-    // Order text is returned to the client — liff.sendMessages() handles sending
-    // Push message removed to prevent duplicate messages in LINE Chat
+    // Send order summary via push message (works in all cases)
+    if (
+      body.lineUserId &&
+      process.env.LINE_CHANNEL_ACCESS_TOKEN &&
+      process.env.LINE_CHANNEL_ACCESS_TOKEN !== "YOUR_CHANNEL_ACCESS_TOKEN_HERE"
+    ) {
+      try {
+        const client = getLineClient();
+        await client.pushMessage({
+          to: body.lineUserId,
+          messages: [{ type: "text", text: orderText }],
+        });
+        console.log("LINE push message sent");
+      } catch (lineErr) {
+        console.error("LINE push message failed:", lineErr);
+      }
+    }
+
     return NextResponse.json({ orderId, orderText });
   } catch (err) {
     console.error("Order error:", err);

@@ -82,18 +82,6 @@ export default function ShopPage() {
           return;
         }
 
-        // Send order summary to LINE Chat via liff.sendMessages (single source)
-        try {
-          const liff = (await import("@line/liff")).default;
-          if (liff.isInClient()) {
-            await liff.sendMessages([
-              { type: "text", text: data.orderText },
-            ]);
-          }
-        } catch (liffErr) {
-          console.log("LIFF sendMessages skipped:", liffErr);
-        }
-
         setOrderNo(data.orderId);
         setScreen("closing");
       } catch (err) {
