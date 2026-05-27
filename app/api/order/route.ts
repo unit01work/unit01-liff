@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLineClient } from "@/lib/line";
+import { saveOrder } from "@/lib/order-store";
 
 interface CartItem {
   name: string;
@@ -24,20 +25,28 @@ function generateOrderId(): string {
   return `#UT-${Date.now().toString(36).toUpperCase().slice(-6)}`;
 }
 
-function buildOrderText(orderId: string, body: OrderBody): string {
-  const { cart, shipping } = body;
-  const sub = cart.reduce((s, c) => s + c.price * c.qty, 0);
-  const ship = 50;
-  const total = sub + ship;
+export async function POST(request: NextRequest) {
+  try {
+    const body: OrderBody = await request.json();
 
-  const items = cart
-    .map(
-      (c) =>
-        `• ${c.name} (${c.size}) ×${c.qty} — ฿${(c.price * c.qty).toLocaleString("en-US")}`
-    )
-    .join("\n");
+    if (!body.cart?.length || !body.shipping?.name) {
+      return NextResponse.json({ error: "Invalid order data" }, { status: 400 });
+    }
 
-  return `🛒 คำสั่งซื้อ UNIT-01
+    const orderId = generateOrderId();
+    const { cart, shipping } = body;
+    const sub = cart.reduce((s, c) => s + c.price * c.qty, 0);
+    const ship = 50;
+    const total = sub + ship;
+
+    const items = cart
+      .map(
+        (c) =>
+          `• ${c.name} (${c.size}) ×${c.qty} — ฿${(c.price * c.qty).toLocaleString("en-US")}`
+      )
+      .join("\n");
+
+    const orderText = `🛒 คำสั่งซื้อ UNIT-01
 
 Order: ${orderId}
 ━━━━━━━━━━━━━━
@@ -50,31 +59,21 @@ ${items}
 📦 จัดส่งถึง:
 ${shipping.name}
 ${shipping.address}, ${shipping.city} ${shipping.zip}
-โทร: ${shipping.phone}
+โทร: ${shipping.phone}`;
 
-💳 กรุณาชำระเงินผ่าน PromptPay
-แล้วส่งสลิปมาที่แชทนี้`;
-}
-
-export async function POST(request: NextRequest) {
-  try {
-    const body: OrderBody = await request.json();
-
-    if (!body.cart?.length || !body.shipping?.name) {
-      return NextResponse.json({ error: "Invalid order data" }, { status: 400 });
-    }
-
-    const orderId = generateOrderId();
-    const orderText = buildOrderText(orderId, body);
+    // Save order amount for QR generation
+    const orderIdClean = orderId.replace("#", "");
+    saveOrder(orderIdClean, total);
 
     console.log("=== NEW ORDER ===");
     console.log("Order ID:", orderId);
+    console.log("Total:", total);
     console.log("LINE User:", body.lineUserId);
     console.log("Items:", JSON.stringify(body.cart, null, 2));
     console.log("Shipping:", JSON.stringify(body.shipping, null, 2));
     console.log("=================");
 
-    // Send order summary via push message (works in all cases)
+    // Send push message with order summary + QR PromptPay
     if (
       body.lineUserId &&
       process.env.LINE_CHANNEL_ACCESS_TOKEN &&
@@ -82,11 +81,28 @@ export async function POST(request: NextRequest) {
     ) {
       try {
         const client = getLineClient();
+
+        // Build QR URL with amount fallback param
+        const host = request.headers.get("host") || "unit01-liff.vercel.app";
+        const protocol = host.includes("localhost") ? "http" : "https";
+        const qrUrl = `${protocol}://${host}/api/qr/${orderIdClean}?amount=${total}`;
+
         await client.pushMessage({
           to: body.lineUserId,
-          messages: [{ type: "text", text: orderText }],
+          messages: [
+            { type: "text", text: orderText },
+            {
+              type: "text",
+              text: `💳 สแกนจ่าย PromptPay ฿${total.toLocaleString("en-US")}\nกรุณาชำระภายใน 24 ชม.\nแล้วส่งสลิปมาที่แชทนี้`,
+            },
+            {
+              type: "image",
+              originalContentUrl: qrUrl,
+              previewImageUrl: qrUrl,
+            },
+          ],
         });
-        console.log("LINE push message sent");
+        console.log("LINE push message sent (order + QR)");
       } catch (lineErr) {
         console.error("LINE push message failed:", lineErr);
       }
