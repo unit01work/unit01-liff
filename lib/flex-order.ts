@@ -34,10 +34,8 @@ export function buildOrderFlex({
   qrUrl: string;
   liffUrl: string;
 }) {
-  const sub = cart.reduce((s, c) => s + c.price * c.qty, 0);
-
   // Build item rows
-  const itemBoxes: object[] = [];
+  const itemBoxes: Record<string, unknown>[] = [];
   cart.forEach((c, i) => {
     if (i > 0) {
       itemBoxes.push({ type: "spacer", size: "md" });
@@ -74,25 +72,27 @@ export function buildOrderFlex({
     );
   });
 
-  const flexMessage = {
+  // Encode Thai text for URI
+  const contactUri = `https://line.me/R/oaMessage/@086nkudl/?text=${encodeURIComponent("สอบถามเรื่องออเดอร์")}`;
+  const editUri = `${liffUrl}?page=edit&order=${orderId.replace("#", "")}`;
+
+  return {
     type: "flex",
-    altText: `🛒 Order ${orderId} — ${fmt(total)}`,
+    altText: `Order ${orderId} - ${fmt(total)}`,
     contents: {
       type: "bubble",
       size: "mega",
-      styles: {
-        body: {
-          backgroundColor: "#FFFFFF",
-        },
-      },
       body: {
         type: "box",
         layout: "vertical",
+        paddingAll: "none",
         contents: [
-          // ── HEADER: ORDER CONFIRMED ──
+          // ── HEADER ──
           {
             type: "box",
             layout: "vertical",
+            backgroundColor: "#E5E0DD",
+            paddingAll: "lg",
             contents: [
               {
                 type: "text",
@@ -112,15 +112,13 @@ export function buildOrderFlex({
                 margin: "sm",
               },
             ],
-            backgroundColor: "#E5E0DD",
-            paddingAll: "lg",
-            cornerRadius: "none",
           },
 
-          // ── ITEMS SECTION ──
+          // ── ITEMS ──
           {
             type: "box",
             layout: "vertical",
+            paddingAll: "lg",
             contents: [
               {
                 type: "text",
@@ -132,181 +130,77 @@ export function buildOrderFlex({
               { type: "spacer", size: "sm" },
               ...itemBoxes,
             ],
-            paddingAll: "lg",
           },
 
-          // ── SEPARATOR ──
-          {
-            type: "separator",
-            color: "#EBE7E4",
-          },
+          { type: "separator", color: "#EBE7E4" },
 
           // ── SHIPPING + TOTAL ──
           {
             type: "box",
             layout: "vertical",
+            paddingAll: "lg",
             contents: [
               {
                 type: "box",
                 layout: "horizontal",
                 contents: [
-                  {
-                    type: "text",
-                    text: "Shipping",
-                    size: "xs",
-                    color: "#888888",
-                    flex: 4,
-                  },
-                  {
-                    type: "text",
-                    text: fmt(ship),
-                    size: "xs",
-                    color: "#888888",
-                    flex: 2,
-                    align: "end",
-                  },
+                  { type: "text", text: "Shipping", size: "xs", color: "#888888", flex: 4 },
+                  { type: "text", text: fmt(ship), size: "xs", color: "#888888", flex: 2, align: "end" },
                 ],
               },
               {
                 type: "box",
                 layout: "horizontal",
-                contents: [
-                  {
-                    type: "text",
-                    text: "Total",
-                    size: "sm",
-                    color: "#1A1A1A",
-                    weight: "bold",
-                    flex: 4,
-                  },
-                  {
-                    type: "text",
-                    text: fmt(total),
-                    size: "sm",
-                    color: "#1A1A1A",
-                    weight: "bold",
-                    flex: 2,
-                    align: "end",
-                  },
-                ],
                 margin: "sm",
+                contents: [
+                  { type: "text", text: "Total", size: "sm", color: "#1A1A1A", weight: "bold", flex: 4 },
+                  { type: "text", text: fmt(total), size: "sm", color: "#1A1A1A", weight: "bold", flex: 2, align: "end" },
+                ],
               },
             ],
-            paddingAll: "lg",
           },
 
-          // ── SEPARATOR ──
-          {
-            type: "separator",
-            color: "#EBE7E4",
-          },
+          { type: "separator", color: "#EBE7E4" },
 
           // ── SHIP TO ──
           {
             type: "box",
             layout: "vertical",
-            contents: [
-              {
-                type: "text",
-                text: "SHIP TO",
-                size: "xxs",
-                color: "#999999",
-                weight: "bold",
-              },
-              {
-                type: "text",
-                text: shipping.name,
-                size: "xs",
-                color: "#1A1A1A",
-                margin: "sm",
-                wrap: true,
-              },
-              {
-                type: "text",
-                text: `${shipping.address}, ${shipping.city} ${shipping.zip}`,
-                size: "xxs",
-                color: "#777777",
-                margin: "xs",
-                wrap: true,
-              },
-              {
-                type: "text",
-                text: `Tel: ${shipping.phone}`,
-                size: "xxs",
-                color: "#777777",
-                margin: "xs",
-              },
-            ],
             paddingAll: "lg",
+            contents: [
+              { type: "text", text: "SHIP TO", size: "xxs", color: "#999999", weight: "bold" },
+              { type: "text", text: shipping.name, size: "xs", color: "#1A1A1A", margin: "sm", wrap: true },
+              { type: "text", text: `${shipping.address}, ${shipping.city} ${shipping.zip}`, size: "xxs", color: "#777777", margin: "xs", wrap: true },
+              { type: "text", text: `Tel: ${shipping.phone}`, size: "xxs", color: "#777777", margin: "xs" },
+            ],
           },
 
-          // ── SEPARATOR ──
-          {
-            type: "separator",
-            color: "#EBE7E4",
-          },
+          { type: "separator", color: "#EBE7E4" },
 
           // ── PROMPTPAY QR ──
           {
             type: "box",
             layout: "vertical",
-            contents: [
-              {
-                type: "text",
-                text: "PROMPTPAY QR",
-                size: "xxs",
-                color: "#999999",
-                weight: "bold",
-                align: "center",
-              },
-              {
-                type: "image",
-                url: qrUrl,
-                size: "lg",
-                aspectRatio: "1:1",
-                aspectMode: "fit",
-                margin: "md",
-              },
-              {
-                type: "text",
-                text: fmt(total),
-                size: "lg",
-                color: "#1A1A1A",
-                weight: "bold",
-                align: "center",
-                margin: "sm",
-              },
-              {
-                type: "text",
-                text: "Send transfer slip\nto this chat",
-                size: "xxs",
-                color: "#999999",
-                align: "center",
-                margin: "sm",
-                wrap: true,
-              },
-            ],
             paddingAll: "lg",
+            contents: [
+              { type: "text", text: "PROMPTPAY QR", size: "xxs", color: "#999999", weight: "bold", align: "center" },
+              { type: "image", url: qrUrl, size: "lg", aspectRatio: "1:1", aspectMode: "fit", margin: "md" },
+              { type: "text", text: fmt(total), size: "lg", color: "#1A1A1A", weight: "bold", align: "center", margin: "sm" },
+              { type: "text", text: "Send transfer slip\nto this chat", size: "xxs", color: "#999999", align: "center", margin: "sm", wrap: true },
+            ],
           },
 
-          // ── SEPARATOR ──
-          {
-            type: "separator",
-            color: "#EBE7E4",
-          },
+          { type: "separator", color: "#EBE7E4" },
 
           // ── EDIT BUTTON ──
           {
             type: "box",
             layout: "vertical",
+            paddingAll: "sm",
             contents: [
               {
                 type: "button",
-                action: {
-                  type: "uri",
-                  label: "✎ Edit information",
-                  uri: `${liffUrl}?page=edit&order=${orderId.replace("#", "")}`,
-                },
+                action: { type: "uri", label: "Edit information", uri: editUri },
                 style: "link",
                 color: "#C47237",
                 height: "sm",
@@ -314,24 +208,17 @@ export function buildOrderFlex({
             ],
           },
 
-          // ── SEPARATOR ──
-          {
-            type: "separator",
-            color: "#EBE7E4",
-          },
+          { type: "separator", color: "#EBE7E4" },
 
           // ── CONTACT BUTTON ──
           {
             type: "box",
             layout: "vertical",
+            paddingAll: "sm",
             contents: [
               {
                 type: "button",
-                action: {
-                  type: "uri",
-                  label: "? Contact us",
-                  uri: "https://line.me/R/oaMessage/@086nkudl/?text=สอบถามเรื่องออเดอร์",
-                },
+                action: { type: "uri", label: "Contact us", uri: contactUri },
                 style: "link",
                 color: "#888888",
                 height: "sm",
@@ -339,10 +226,7 @@ export function buildOrderFlex({
             ],
           },
         ],
-        paddingAll: "none",
       },
     },
   };
-
-  return flexMessage;
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getLineClient } from "@/lib/line";
 import { saveOrder } from "@/lib/order-store";
 import { buildOrderFlex } from "@/lib/flex-order";
+import { fmt } from "@/lib/tokens";
 
 interface CartItem {
   name: string;
@@ -76,9 +77,9 @@ export async function POST(request: NextRequest) {
       process.env.LINE_CHANNEL_ACCESS_TOKEN &&
       process.env.LINE_CHANNEL_ACCESS_TOKEN !== "YOUR_CHANNEL_ACCESS_TOKEN_HERE"
     ) {
-      try {
-        const client = getLineClient();
+      const client = getLineClient();
 
+      try {
         const flexMsg = buildOrderFlex({
           orderId,
           cart,
@@ -91,11 +92,25 @@ export async function POST(request: NextRequest) {
 
         await client.pushMessage({
           to: body.lineUserId,
-          messages: [flexMsg as never],
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          messages: [flexMsg as any],
         });
         console.log("LINE Flex Message sent");
-      } catch (lineErr) {
-        console.error("LINE push message failed:", lineErr);
+      } catch (flexErr) {
+        console.error("Flex message failed, sending text fallback:", flexErr);
+        // Fallback to plain text
+        try {
+          await client.pushMessage({
+            to: body.lineUserId,
+            messages: [
+              { type: "text", text: orderText },
+              { type: "text", text: `💳 สแกนจ่าย PromptPay ${fmt(total)}\nกรุณาชำระภายใน 24 ชม.\nแล้วส่งสลิปมาที่แชทนี้` },
+            ],
+          });
+          console.log("Fallback text message sent");
+        } catch (textErr) {
+          console.error("Text fallback also failed:", textErr);
+        }
       }
     }
 
