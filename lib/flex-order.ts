@@ -1,0 +1,348 @@
+// LINE Flex Message builder for order confirmation
+
+interface CartItem {
+  name: string;
+  size: string;
+  price: number;
+  qty: number;
+}
+
+interface ShippingInfo {
+  name: string;
+  phone: string;
+  address: string;
+  city: string;
+  zip: string;
+}
+
+const fmt = (n: number) => `฿${n.toLocaleString("en-US")}`;
+
+export function buildOrderFlex({
+  orderId,
+  cart,
+  shipping,
+  total,
+  ship,
+  qrUrl,
+  liffUrl,
+}: {
+  orderId: string;
+  cart: CartItem[];
+  shipping: ShippingInfo;
+  total: number;
+  ship: number;
+  qrUrl: string;
+  liffUrl: string;
+}) {
+  const sub = cart.reduce((s, c) => s + c.price * c.qty, 0);
+
+  // Build item rows
+  const itemBoxes: object[] = [];
+  cart.forEach((c, i) => {
+    if (i > 0) {
+      itemBoxes.push({ type: "spacer", size: "md" });
+    }
+    itemBoxes.push(
+      {
+        type: "box",
+        layout: "horizontal",
+        contents: [
+          {
+            type: "text",
+            text: c.name,
+            size: "xs",
+            color: "#1A1A1A",
+            flex: 4,
+            wrap: true,
+          },
+          {
+            type: "text",
+            text: fmt(c.price * c.qty),
+            size: "xs",
+            color: "#1A1A1A",
+            flex: 2,
+            align: "end",
+          },
+        ],
+      },
+      {
+        type: "text",
+        text: `Size ${c.size}  x${c.qty}`,
+        size: "xxs",
+        color: "#888888",
+      }
+    );
+  });
+
+  const flexMessage = {
+    type: "flex",
+    altText: `🛒 Order ${orderId} — ${fmt(total)}`,
+    contents: {
+      type: "bubble",
+      size: "mega",
+      styles: {
+        body: {
+          backgroundColor: "#FFFFFF",
+        },
+      },
+      body: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          // ── HEADER: ORDER CONFIRMED ──
+          {
+            type: "box",
+            layout: "vertical",
+            contents: [
+              {
+                type: "text",
+                text: "ORDER CONFIRMED",
+                size: "xxs",
+                color: "#555555",
+                weight: "bold",
+                align: "center",
+              },
+              {
+                type: "text",
+                text: orderId,
+                size: "md",
+                color: "#1A1A1A",
+                weight: "bold",
+                align: "center",
+                margin: "sm",
+              },
+            ],
+            backgroundColor: "#E5E0DD",
+            paddingAll: "lg",
+            cornerRadius: "none",
+          },
+
+          // ── ITEMS SECTION ──
+          {
+            type: "box",
+            layout: "vertical",
+            contents: [
+              {
+                type: "text",
+                text: "ITEMS",
+                size: "xxs",
+                color: "#999999",
+                weight: "bold",
+              },
+              { type: "spacer", size: "sm" },
+              ...itemBoxes,
+            ],
+            paddingAll: "lg",
+          },
+
+          // ── SEPARATOR ──
+          {
+            type: "separator",
+            color: "#EBE7E4",
+          },
+
+          // ── SHIPPING + TOTAL ──
+          {
+            type: "box",
+            layout: "vertical",
+            contents: [
+              {
+                type: "box",
+                layout: "horizontal",
+                contents: [
+                  {
+                    type: "text",
+                    text: "Shipping",
+                    size: "xs",
+                    color: "#888888",
+                    flex: 4,
+                  },
+                  {
+                    type: "text",
+                    text: fmt(ship),
+                    size: "xs",
+                    color: "#888888",
+                    flex: 2,
+                    align: "end",
+                  },
+                ],
+              },
+              {
+                type: "box",
+                layout: "horizontal",
+                contents: [
+                  {
+                    type: "text",
+                    text: "Total",
+                    size: "sm",
+                    color: "#1A1A1A",
+                    weight: "bold",
+                    flex: 4,
+                  },
+                  {
+                    type: "text",
+                    text: fmt(total),
+                    size: "sm",
+                    color: "#1A1A1A",
+                    weight: "bold",
+                    flex: 2,
+                    align: "end",
+                  },
+                ],
+                margin: "sm",
+              },
+            ],
+            paddingAll: "lg",
+          },
+
+          // ── SEPARATOR ──
+          {
+            type: "separator",
+            color: "#EBE7E4",
+          },
+
+          // ── SHIP TO ──
+          {
+            type: "box",
+            layout: "vertical",
+            contents: [
+              {
+                type: "text",
+                text: "SHIP TO",
+                size: "xxs",
+                color: "#999999",
+                weight: "bold",
+              },
+              {
+                type: "text",
+                text: shipping.name,
+                size: "xs",
+                color: "#1A1A1A",
+                margin: "sm",
+                wrap: true,
+              },
+              {
+                type: "text",
+                text: `${shipping.address}, ${shipping.city} ${shipping.zip}`,
+                size: "xxs",
+                color: "#777777",
+                margin: "xs",
+                wrap: true,
+              },
+              {
+                type: "text",
+                text: `Tel: ${shipping.phone}`,
+                size: "xxs",
+                color: "#777777",
+                margin: "xs",
+              },
+            ],
+            paddingAll: "lg",
+          },
+
+          // ── SEPARATOR ──
+          {
+            type: "separator",
+            color: "#EBE7E4",
+          },
+
+          // ── PROMPTPAY QR ──
+          {
+            type: "box",
+            layout: "vertical",
+            contents: [
+              {
+                type: "text",
+                text: "PROMPTPAY QR",
+                size: "xxs",
+                color: "#999999",
+                weight: "bold",
+                align: "center",
+              },
+              {
+                type: "image",
+                url: qrUrl,
+                size: "lg",
+                aspectRatio: "1:1",
+                aspectMode: "fit",
+                margin: "md",
+              },
+              {
+                type: "text",
+                text: fmt(total),
+                size: "lg",
+                color: "#1A1A1A",
+                weight: "bold",
+                align: "center",
+                margin: "sm",
+              },
+              {
+                type: "text",
+                text: "Send transfer slip\nto this chat",
+                size: "xxs",
+                color: "#999999",
+                align: "center",
+                margin: "sm",
+                wrap: true,
+              },
+            ],
+            paddingAll: "lg",
+          },
+
+          // ── SEPARATOR ──
+          {
+            type: "separator",
+            color: "#EBE7E4",
+          },
+
+          // ── EDIT BUTTON ──
+          {
+            type: "box",
+            layout: "vertical",
+            contents: [
+              {
+                type: "button",
+                action: {
+                  type: "uri",
+                  label: "✎ Edit information",
+                  uri: `${liffUrl}?page=edit&order=${orderId.replace("#", "")}`,
+                },
+                style: "link",
+                color: "#C47237",
+                height: "sm",
+              },
+            ],
+          },
+
+          // ── SEPARATOR ──
+          {
+            type: "separator",
+            color: "#EBE7E4",
+          },
+
+          // ── CONTACT BUTTON ──
+          {
+            type: "box",
+            layout: "vertical",
+            contents: [
+              {
+                type: "button",
+                action: {
+                  type: "uri",
+                  label: "? Contact us",
+                  uri: "https://line.me/R/oaMessage/@086nkudl/?text=สอบถามเรื่องออเดอร์",
+                },
+                style: "link",
+                color: "#888888",
+                height: "sm",
+              },
+            ],
+          },
+        ],
+        paddingAll: "none",
+      },
+    },
+  };
+
+  return flexMessage;
+}

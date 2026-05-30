@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLineClient } from "@/lib/line";
 import { saveOrder } from "@/lib/order-store";
+import { buildOrderFlex } from "@/lib/flex-order";
 
 interface CartItem {
   name: string;
@@ -25,6 +26,8 @@ function generateOrderId(): string {
   return `#UT-${Date.now().toString(36).toUpperCase().slice(-6)}`;
 }
 
+const LIFF_URL = "https://liff.line.me/2010192572-jfj8ev6c";
+
 export async function POST(request: NextRequest) {
   try {
     const body: OrderBody = await request.json();
@@ -39,6 +42,16 @@ export async function POST(request: NextRequest) {
     const ship = 50;
     const total = sub + ship;
 
+    // Save order amount for QR generation
+    const orderIdClean = orderId.replace("#", "");
+    saveOrder(orderIdClean, total);
+
+    // Build QR URL
+    const host = request.headers.get("host") || "unit01-liff.vercel.app";
+    const protocol = host.includes("localhost") ? "http" : "https";
+    const qrUrl = `${protocol}://${host}/api/qr/${orderIdClean}?amount=${total}`;
+
+    // Build order text for fallback
     const items = cart
       .map(
         (c) =>
@@ -46,24 +59,7 @@ export async function POST(request: NextRequest) {
       )
       .join("\n");
 
-    const orderText = `🛒 คำสั่งซื้อ UNIT-01
-
-Order: ${orderId}
-━━━━━━━━━━━━━━
-${items}
-━━━━━━━━━━━━━━
-รวม: ฿${sub.toLocaleString("en-US")}
-ค่าส่ง: ฿${ship}
-ยอดชำระ: ฿${total.toLocaleString("en-US")}
-
-📦 จัดส่งถึง:
-${shipping.name}
-${shipping.address}, ${shipping.city} ${shipping.zip}
-โทร: ${shipping.phone}`;
-
-    // Save order amount for QR generation
-    const orderIdClean = orderId.replace("#", "");
-    saveOrder(orderIdClean, total);
+    const orderText = `🛒 Order ${orderId}\n${items}\nTotal: ฿${total.toLocaleString("en-US")}`;
 
     console.log("=== NEW ORDER ===");
     console.log("Order ID:", orderId);
@@ -71,9 +67,10 @@ ${shipping.address}, ${shipping.city} ${shipping.zip}
     console.log("LINE User:", body.lineUserId);
     console.log("Items:", JSON.stringify(body.cart, null, 2));
     console.log("Shipping:", JSON.stringify(body.shipping, null, 2));
+    console.log("QR URL:", qrUrl);
     console.log("=================");
 
-    // Send push message with order summary + QR PromptPay
+    // Send Flex Message via push
     if (
       body.lineUserId &&
       process.env.LINE_CHANNEL_ACCESS_TOKEN &&
@@ -82,27 +79,21 @@ ${shipping.address}, ${shipping.city} ${shipping.zip}
       try {
         const client = getLineClient();
 
-        // Build QR URL with amount fallback param
-        const host = request.headers.get("host") || "unit01-liff.vercel.app";
-        const protocol = host.includes("localhost") ? "http" : "https";
-        const qrUrl = `${protocol}://${host}/api/qr/${orderIdClean}?amount=${total}`;
+        const flexMsg = buildOrderFlex({
+          orderId,
+          cart,
+          shipping,
+          total,
+          ship,
+          qrUrl,
+          liffUrl: LIFF_URL,
+        });
 
         await client.pushMessage({
           to: body.lineUserId,
-          messages: [
-            { type: "text", text: orderText },
-            {
-              type: "text",
-              text: `💳 สแกนจ่าย PromptPay ฿${total.toLocaleString("en-US")}\nกรุณาชำระภายใน 24 ชม.\nแล้วส่งสลิปมาที่แชทนี้`,
-            },
-            {
-              type: "image",
-              originalContentUrl: qrUrl,
-              previewImageUrl: qrUrl,
-            },
-          ],
+          messages: [flexMsg as never],
         });
-        console.log("LINE push message sent (order + QR)");
+        console.log("LINE Flex Message sent");
       } catch (lineErr) {
         console.error("LINE push message failed:", lineErr);
       }
