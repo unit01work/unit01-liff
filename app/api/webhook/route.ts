@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { validateSignature } from "@line/bot-sdk";
 import { getLineClient } from "@/lib/line";
+import { downloadLineImage, verifySlip } from "@/lib/slipok";
+import {
+  findPendingOrder,
+  checkDuplicateTransRef,
+  updateOrderStatus,
+} from "@/lib/sheets";
 
 const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}`;
 
@@ -33,15 +39,6 @@ function statusReply() {
   ];
 }
 
-function slipReply() {
-  return [
-    {
-      type: "text" as const,
-      text: `✅ ได้รับสลิปเรียบร้อยแล้วครับ\n\nทีมงานจะตรวจสอบและยืนยันออเดอร์ภายใน 24 ชม.\nขอบคุณที่สั่งซื้อกับ UNIT-01 🙏`,
-    },
-  ];
-}
-
 function helpReply() {
   return [
     {
@@ -58,6 +55,95 @@ function defaultReply() {
       text: `สวัสดีครับ ยินดีต้อนรับสู่ UNIT-01 🖤\n\nพิมพ์ "สั่งซื้อ" เพื่อเปิดร้านค้า\nพิมพ์ "สถานะ" เพื่อเช็คออเดอร์\nหรือพิมพ์ "เมนู" เพื่อดูคำสั่งทั้งหมด`,
     },
   ];
+}
+
+/* ── Slip verification reply messages ── */
+function replyConfirmPayment(orderId: string, amount: number) {
+  return [
+    {
+      type: "text" as const,
+      text: `✅ Payment Confirmed\n\nOrder: ${orderId}\nAmount: ฿${amount.toLocaleString()}\nStatus: PAID\n\nกำลังเตรียมจัดส่งสินค้า\nขอบคุณที่สั่งซื้อครับ 🙏`,
+    },
+  ];
+}
+
+function replyNoMatchingOrder(amount: number) {
+  return [
+    {
+      type: "text" as const,
+      text: `⚠️ ไม่พบออเดอร์ที่ตรงกับยอดโอน ฿${amount.toLocaleString()}\n\nกรุณาตรวจสอบยอดเงินอีกครั้ง\nหรือติดต่อร้านค้าเพื่อตรวจสอบ`,
+    },
+  ];
+}
+
+function replyInvalidSlip() {
+  return [
+    {
+      type: "text" as const,
+      text: `❌ ไม่สามารถตรวจสอบสลิปได้\n\nกรุณาส่งรูปสลิปที่ชัดเจน\nโดยต้องเห็น QR Code บนสลิปครบถ้วน`,
+    },
+  ];
+}
+
+function replyDuplicateSlip() {
+  return [
+    {
+      type: "text" as const,
+      text: `⚠️ สลิปนี้เคยใช้ยืนยันแล้ว\n\nกรุณาส่งสลิปใบใหม่`,
+    },
+  ];
+}
+
+/* ── Handle image (slip) message ── */
+async function handleSlipImage(
+  messageId: string,
+  userId: string
+): Promise<{ type: "text"; text: string }[]> {
+  try {
+    // 1. Download image from LINE
+    console.log("[slip] Downloading image:", messageId);
+    const imageBuffer = await downloadLineImage(messageId);
+    console.log("[slip] Image size:", imageBuffer.length);
+
+    // 2. Verify with SlipOK
+    console.log("[slip] Sending to SlipOK...");
+    const slipResult = await verifySlip(imageBuffer);
+    console.log("[slip] SlipOK result:", JSON.stringify(slipResult));
+
+    // 3. Check if slip is valid
+    if (!slipResult.success || !slipResult.data?.success) {
+      console.log("[slip] Invalid slip");
+      return replyInvalidSlip();
+    }
+
+    const amount = slipResult.data.amount;
+    const transRef = slipResult.data.transRef;
+    console.log("[slip] Amount:", amount, "TransRef:", transRef);
+
+    // 4. Check for duplicate transRef
+    const isDuplicate = await checkDuplicateTransRef(transRef);
+    if (isDuplicate) {
+      console.log("[slip] Duplicate transRef:", transRef);
+      return replyDuplicateSlip();
+    }
+
+    // 5. Find matching PENDING order
+    const order = await findPendingOrder(userId, amount);
+    if (!order) {
+      console.log("[slip] No matching order for userId:", userId, "amount:", amount);
+      return replyNoMatchingOrder(amount);
+    }
+
+    // 6. Update order status to PAID
+    console.log("[slip] Updating order:", order["Order ID"]);
+    await updateOrderStatus(order["Order ID"], "PAID", transRef);
+
+    // 7. Return confirmation
+    return replyConfirmPayment(order["Order ID"], amount);
+  } catch (err) {
+    console.error("[slip] Error processing slip:", err);
+    return replyInvalidSlip();
+  }
 }
 
 /* ── webhook handler ── */
@@ -110,8 +196,10 @@ export async function POST(request: NextRequest) {
           messages = defaultReply();
         }
       } else if (event.message.type === "image") {
-        // Customer sent an image (likely a payment slip)
-        messages = slipReply();
+        // Customer sent an image — verify as payment slip
+        const userId = event.source?.userId || "";
+        const messageId = event.message.id;
+        messages = await handleSlipImage(messageId, userId);
       } else {
         // Sticker, video, audio, etc.
         messages = defaultReply();

@@ -19,6 +19,8 @@ export interface OrderRow {
   "Province": string;
   "Postal Code": string;
   "Updated At": string;
+  "Transaction Ref": string;
+  "Paid At": string;
 }
 
 function getPrivateKey(): string {
@@ -65,7 +67,7 @@ const HEADERS = [
   "Items", "Subtotal", "Shipping Fee", "Total",
   "First Name", "Last Name", "Phone", "Address",
   "Sub-district", "District", "Province", "Postal Code",
-  "Updated At",
+  "Updated At", "Transaction Ref", "Paid At",
 ];
 
 async function getOrCreateSheet(doc: GoogleSpreadsheet) {
@@ -169,6 +171,8 @@ export async function getOrder(orderId: string): Promise<OrderRow | null> {
     "Province": row.get("Province"),
     "Postal Code": row.get("Postal Code"),
     "Updated At": row.get("Updated At"),
+    "Transaction Ref": row.get("Transaction Ref") || "",
+    "Paid At": row.get("Paid At") || "",
   };
 }
 
@@ -218,4 +222,97 @@ export async function ensureHeaders() {
   if (rows.length === 0) {
     await sheet.setHeaderRow(HEADERS);
   }
+}
+
+/* ── Slip verification helpers ── */
+
+/**
+ * Find a PENDING order for the given user with matching amount.
+ * Returns the most recent match (last row).
+ */
+export async function findPendingOrder(
+  userId: string,
+  amount: number
+): Promise<OrderRow | null> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = doc.sheetsByTitle["Orders"];
+  if (!sheet) return null;
+  try { await sheet.loadHeaderRow(); } catch { return null; }
+
+  const rows = await sheet.getRows();
+
+  // Search from last to first (most recent order first)
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    const status = (row.get("Status") || "").toUpperCase();
+    const lineUserId = row.get("LINE User ID") || "";
+    const total = Number(row.get("Total") || 0);
+
+    if (status === "PENDING" && lineUserId === userId && total === amount) {
+      return {
+        "Order ID": row.get("Order ID"),
+        "Date": row.get("Date"),
+        "LINE User ID": lineUserId,
+        "Status": row.get("Status"),
+        "Items": row.get("Items"),
+        "Subtotal": Number(row.get("Subtotal")),
+        "Shipping Fee": Number(row.get("Shipping Fee")),
+        "Total": total,
+        "First Name": row.get("First Name"),
+        "Last Name": row.get("Last Name"),
+        "Phone": row.get("Phone"),
+        "Address": row.get("Address"),
+        "Sub-district": row.get("Sub-district"),
+        "District": row.get("District"),
+        "Province": row.get("Province"),
+        "Postal Code": row.get("Postal Code"),
+        "Updated At": row.get("Updated At"),
+        "Transaction Ref": row.get("Transaction Ref") || "",
+        "Paid At": row.get("Paid At") || "",
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Check if a transRef has already been used (duplicate slip protection).
+ */
+export async function checkDuplicateTransRef(transRef: string): Promise<boolean> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = doc.sheetsByTitle["Orders"];
+  if (!sheet) return false;
+  try { await sheet.loadHeaderRow(); } catch { return false; }
+
+  const rows = await sheet.getRows();
+  return rows.some((row) => (row.get("Transaction Ref") || "") === transRef);
+}
+
+/**
+ * Update an order's status to PAID with transaction reference.
+ */
+export async function updateOrderStatus(
+  orderId: string,
+  status: string,
+  transRef: string
+): Promise<boolean> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = doc.sheetsByTitle["Orders"];
+  if (!sheet) return false;
+  try { await sheet.loadHeaderRow(); } catch { return false; }
+
+  const rows = await sheet.getRows();
+  const row = rows.find((r) => matchOrderId(r.get("Order ID") || "", orderId));
+  if (!row) return false;
+
+  row.set("Status", status);
+  row.set("Transaction Ref", transRef);
+  row.set("Paid At", nowBKK());
+  row.set("Updated At", nowBKK());
+  await row.save();
+  return true;
 }
