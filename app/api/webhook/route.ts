@@ -59,10 +59,11 @@ function defaultReply() {
 
 /* ── Slip verification reply messages ── */
 function replyConfirmPayment(orderId: string, amount: number) {
+  const id = orderId.startsWith("#") ? orderId : `#${orderId}`;
   return [
     {
       type: "text" as const,
-      text: `✅ Payment Confirmed\n\nOrder: ${orderId}\nAmount: ฿${amount.toLocaleString()}\nStatus: PAID\n\nกำลังเตรียมจัดส่งสินค้า\nขอบคุณที่สั่งซื้อครับ 🙏`,
+      text: `ORDER CONFIRMED\n${id} · ฿${amount.toLocaleString()}\n\nPREPARING FOR DISPATCH.\nYOUR FIRST UNIT. USE IT WELL.`,
     },
   ];
 }
