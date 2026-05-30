@@ -1,0 +1,13 @@
+client_id = "7a9ceedc650b9c88f35d82115850678a"
+name = "LIFF Integration"
+application_url = "https://unit01-liff.vercel.app"
+embedded = false
+
+[access_scopes]
+scopes = "read_products,write_draft_orders,read_draft_orders,read_inventory"
+
+[auth]
+redirect_urls = ["https://unit01-liff.vercel.app/api/shopify/token"]
+
+[webhooks]
+api_version = "2026-04"
