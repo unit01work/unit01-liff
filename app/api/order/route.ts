@@ -9,6 +9,7 @@ interface CartItem {
   size: string;
   price: number;
   qty: number;
+  shopifyVariantId?: string;
 }
 
 interface OrderBody {
@@ -63,6 +64,12 @@ export async function POST(request: NextRequest) {
 
     // 2. Save to Google Sheets
     try {
+      // Build variant IDs string: "shopifyVariantId:qty,shopifyVariantId:qty"
+      const variantIds = cart
+        .filter((c) => c.shopifyVariantId)
+        .map((c) => `${c.shopifyVariantId}:${c.qty}`)
+        .join(",");
+
       await appendOrder({
         orderId,
         lineUserId: body.lineUserId,
@@ -78,6 +85,7 @@ export async function POST(request: NextRequest) {
         district: shipping.district,
         province: shipping.province,
         postalCode: shipping.postalCode,
+        variantIds,
       });
       console.log("✅ Saved to Google Sheets");
     } catch (sheetErr) {

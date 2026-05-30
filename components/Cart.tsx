@@ -11,6 +11,7 @@ export interface CartItem {
   cartId: string;
   productId: string;
   variantId: string;
+  shopifyVariantId: string;
   name: string;
   size: string;
   price: number;

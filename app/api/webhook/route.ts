@@ -6,7 +6,10 @@ import {
   findPendingOrder,
   checkDuplicateTransRef,
   updateOrderStatus,
+  getOrder,
+  updateShopifyOrderId,
 } from "@/lib/sheets";
+import { createShopifyDraftOrder } from "@/lib/shopify";
 
 const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}`;
 
@@ -136,11 +139,27 @@ async function handleSlipImage(
     }
 
     // 6. Update order status to PAID
-    console.log("[slip] Updating order:", order["Order ID"]);
-    await updateOrderStatus(order["Order ID"], "PAID", transRef);
+    const orderId = order["Order ID"];
+    console.log("[slip] Updating order:", orderId);
+    await updateOrderStatus(orderId, "PAID", transRef);
 
-    // 7. Return confirmation
-    return replyConfirmPayment(order["Order ID"], amount);
+    // 7. Create Shopify Draft Order
+    try {
+      const freshOrder = await getOrder(orderId);
+      if (freshOrder && freshOrder["Variant IDs"]) {
+        const shopifyOrder = await createShopifyDraftOrder(freshOrder);
+        await updateShopifyOrderId(orderId, String(shopifyOrder.id));
+        console.log("[slip] Shopify Draft Order created:", shopifyOrder.id);
+      } else {
+        console.log("[slip] No variant IDs, skipping Shopify Draft Order");
+      }
+    } catch (shopifyErr) {
+      console.error("[slip] Shopify Draft Order failed:", shopifyErr);
+      // Don't block payment confirmation if Shopify fails
+    }
+
+    // 8. Return confirmation
+    return replyConfirmPayment(orderId, amount);
   } catch (err) {
     console.error("[slip] Error processing slip:", err);
     return replyInvalidSlip();

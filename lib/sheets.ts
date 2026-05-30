@@ -21,6 +21,8 @@ export interface OrderRow {
   "Updated At": string;
   "Transaction Ref": string;
   "Paid At": string;
+  "Variant IDs": string;
+  "Shopify Order ID": string;
 }
 
 function getPrivateKey(): string {
@@ -68,6 +70,7 @@ const HEADERS = [
   "First Name", "Last Name", "Phone", "Address",
   "Sub-district", "District", "Province", "Postal Code",
   "Updated At", "Transaction Ref", "Paid At",
+  "Variant IDs", "Shopify Order ID",
 ];
 
 async function getOrCreateSheet(doc: GoogleSpreadsheet) {
@@ -102,6 +105,7 @@ export async function appendOrder(data: {
   district: string;
   province: string;
   postalCode: string;
+  variantIds?: string;
 }) {
   const doc = getDoc();
   await doc.loadInfo();
@@ -131,6 +135,7 @@ export async function appendOrder(data: {
     "Province": data.province,
     "Postal Code": data.postalCode,
     "Updated At": now,
+    "Variant IDs": data.variantIds || "",
   });
 }
 
@@ -173,6 +178,8 @@ export async function getOrder(orderId: string): Promise<OrderRow | null> {
     "Updated At": row.get("Updated At"),
     "Transaction Ref": row.get("Transaction Ref") || "",
     "Paid At": row.get("Paid At") || "",
+    "Variant IDs": row.get("Variant IDs") || "",
+    "Shopify Order ID": row.get("Shopify Order ID") || "",
   };
 }
 
@@ -270,6 +277,8 @@ export async function findPendingOrder(
         "Updated At": row.get("Updated At"),
         "Transaction Ref": row.get("Transaction Ref") || "",
         "Paid At": row.get("Paid At") || "",
+        "Variant IDs": row.get("Variant IDs") || "",
+        "Shopify Order ID": row.get("Shopify Order ID") || "",
       };
     }
   }
@@ -312,6 +321,29 @@ export async function updateOrderStatus(
   row.set("Status", status);
   row.set("Transaction Ref", transRef);
   row.set("Paid At", nowBKK());
+  row.set("Updated At", nowBKK());
+  await row.save();
+  return true;
+}
+
+/**
+ * Save Shopify Draft Order ID back to the order row.
+ */
+export async function updateShopifyOrderId(
+  orderId: string,
+  shopifyOrderId: string
+): Promise<boolean> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = doc.sheetsByTitle["Orders"];
+  if (!sheet) return false;
+  try { await sheet.loadHeaderRow(); } catch { return false; }
+
+  const rows = await sheet.getRows();
+  const row = rows.find((r) => matchOrderId(r.get("Order ID") || "", orderId));
+  if (!row) return false;
+
+  row.set("Shopify Order ID", shopifyOrderId);
   row.set("Updated At", nowBKK());
   await row.save();
   return true;

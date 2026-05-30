@@ -117,7 +117,7 @@ function ShopFlow() {
     setCart((prev) => {
       const ex = prev.find((c) => c.variantId === v.id);
       if (ex) return prev.map((c) => c.variantId === v.id ? { ...c, qty: Math.min(c.qty + 1, v.stock) } : c);
-      return [...prev, { cartId: `c-${Date.now()}`, productId: p.id, variantId: v.id, name: p.name, size: v.size, price: p.price, image: p.image, qty: 1, maxStock: v.stock }];
+      return [...prev, { cartId: `c-${Date.now()}`, productId: p.id, variantId: v.id, shopifyVariantId: v.shopifyVariantId, name: p.name, size: v.size, price: p.price, image: p.image, qty: 1, maxStock: v.stock }];
     });
   }, []);
 
@@ -138,7 +138,7 @@ function ShopFlow() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          cart: cart.map((c) => ({ name: c.name, size: c.size, price: c.price, qty: c.qty })),
+          cart: cart.map((c) => ({ name: c.name, size: c.size, price: c.price, qty: c.qty, shopifyVariantId: c.shopifyVariantId })),
           shipping: form,
           lineUserId: profile?.userId || "",
         }),
