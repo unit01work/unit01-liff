@@ -10,6 +10,8 @@ interface EditFormProps {
   initialName: string;
   initialPhone: string;
   initialAddress: string;
+  initialCity: string;
+  initialZip: string;
   onClose: () => void;
 }
 
@@ -61,8 +63,8 @@ function Fld({
 
 type SaveState = "idle" | "saving" | "done" | "error";
 
-export function EditForm({ orderId, initialName, initialPhone, initialAddress, onClose }: EditFormProps) {
-  const [form, setForm] = useState({ name: initialName, phone: initialPhone, address: initialAddress });
+export function EditForm({ orderId, initialName, initialPhone, initialAddress, initialCity, initialZip, onClose }: EditFormProps) {
+  const [form, setForm] = useState({ name: initialName, phone: initialPhone, address: initialAddress, city: initialCity, zip: initialZip });
   const [err, setErr] = useState<Record<string, boolean>>({});
   const [saveState, setSaveState] = useState<SaveState>("idle");
 
@@ -73,9 +75,9 @@ export function EditForm({ orderId, initialName, initialPhone, initialAddress, o
 
   const validate = () => {
     const e: Record<string, boolean> = {};
-    if (!form.name.trim()) e.name = true;
-    if (!form.phone.trim()) e.phone = true;
-    if (!form.address.trim()) e.address = true;
+    (["name", "phone", "address", "city", "zip"] as const).forEach((k) => {
+      if (!form[k].trim()) e[k] = true;
+    });
     setErr(e);
     return Object.keys(e).length === 0;
   };
@@ -152,9 +154,13 @@ export function EditForm({ orderId, initialName, initialPhone, initialAddress, o
         </div>
 
         <div style={{ padding: "20px 16px 32px", display: "flex", flexDirection: "column", gap: 20 }}>
-          <Fld label="FULL NAME" field="name" ph="ชื่อ-นามสกุล" value={form.name} error={!!err.name} onChange={upd} />
+          <Fld label="FULL NAME" field="name" ph="Trai Nimtawat" value={form.name} error={!!err.name} onChange={upd} />
           <Fld label="PHONE NUMBER" field="phone" ph="081 234 5678" value={form.phone} error={!!err.phone} onChange={upd} />
-          <Fld label="SHIPPING ADDRESS" field="address" ph="ที่อยู่จัดส่ง" area value={form.address} error={!!err.address} onChange={upd} />
+          <Fld label="SHIPPING ADDRESS" field="address" ph="99/1 Sukhumvit Rd, Khlong Toei" area value={form.address} error={!!err.address} onChange={upd} />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Fld label="CITY / PROVINCE" field="city" ph="Bangkok" value={form.city} error={!!err.city} onChange={upd} />
+            <Fld label="POSTAL CODE" field="zip" ph="10110" value={form.zip} error={!!err.zip} onChange={upd} />
+          </div>
         </div>
 
         <div style={{ padding: "0 16px 24px", display: "flex", justifyContent: "center" }}>

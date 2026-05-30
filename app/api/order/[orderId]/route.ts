@@ -32,9 +32,9 @@ export async function PUT(
 ) {
   try {
     const { orderId } = await params;
-    const body: { name: string; phone: string; address: string } = await request.json();
+    const body: { name: string; phone: string; address: string; city: string; zip: string } = await request.json();
 
-    if (!body.name || !body.phone || !body.address) {
+    if (!body.name || !body.phone || !body.address || !body.city || !body.zip) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
@@ -63,8 +63,8 @@ export async function PUT(
           name: body.name,
           phone: body.phone,
           address: body.address,
-          city: "",
-          zip: "",
+          city: body.city,
+          zip: body.zip,
         };
 
         const flexMsg = buildOrderFlex({

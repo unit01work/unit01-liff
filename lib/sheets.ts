@@ -16,10 +16,24 @@ export interface OrderRow {
   "Updated At": string;
 }
 
+function getPrivateKey(): string {
+  const raw = process.env.GOOGLE_PRIVATE_KEY || "";
+  // Handle all Vercel/env encoding scenarios:
+  // 1. Already has real newlines → use as-is
+  // 2. Has literal \n (2 chars: backslash + n) → replace with real newline
+  if (raw.includes("\\n")) {
+    return raw.split("\\n").join("\n");
+  }
+  return raw;
+}
+
 function getDoc() {
+  const key = getPrivateKey();
+  console.log("[sheets] key starts with:", key.slice(0, 40));
+  console.log("[sheets] key has real newlines:", key.includes("\n"));
   const serviceAccountAuth = new JWT({
     email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL!,
-    key: process.env.GOOGLE_PRIVATE_KEY!.replace(/\\n/g, "\n"),
+    key,
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
   return new GoogleSpreadsheet(process.env.GOOGLE_SHEETS_ID!, serviceAccountAuth);
@@ -124,7 +138,7 @@ export async function getOrder(orderId: string): Promise<OrderRow | null> {
 
 export async function updateOrderShipping(
   orderId: string,
-  data: { name: string; phone: string; address: string }
+  data: { name: string; phone: string; address: string; city: string; zip: string }
 ): Promise<boolean> {
   const doc = getDoc();
   await doc.loadInfo();
@@ -135,9 +149,13 @@ export async function updateOrderShipping(
   const row = rows.find((r) => r.get("Order ID") === orderId);
   if (!row) return false;
 
+  const fullAddress = data.city || data.zip
+    ? `${data.address}, ${data.city} ${data.zip}`.trim()
+    : data.address;
+
   row.set("Name", data.name);
   row.set("Phone", data.phone);
-  row.set("Address", data.address);
+  row.set("Address", fullAddress);
   row.set("Updated At", nowBKK());
   await row.save();
   return true;
