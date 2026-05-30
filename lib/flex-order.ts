@@ -8,11 +8,14 @@ interface CartItem {
 }
 
 interface ShippingInfo {
-  name: string;
+  firstName: string;
+  lastName: string;
   phone: string;
   address: string;
-  city: string;
-  zip: string;
+  postalCode: string;
+  subDistrict: string;
+  district: string;
+  province: string;
 }
 
 const fmt = (n: number) => `฿${n.toLocaleString("en-US")}`;
@@ -167,8 +170,10 @@ export function buildOrderFlex({
             paddingAll: "lg",
             contents: [
               { type: "text", text: "SHIP TO", size: "xxs", color: "#999999", weight: "bold" },
-              { type: "text", text: shipping.name, size: "xs", color: "#1A1A1A", margin: "sm", wrap: true },
-              { type: "text", text: `${shipping.address}, ${shipping.city} ${shipping.zip}`, size: "xxs", color: "#777777", margin: "xs", wrap: true },
+              { type: "text", text: `${shipping.firstName} ${shipping.lastName}`, size: "xs", color: "#1A1A1A", margin: "sm", wrap: true },
+              { type: "text", text: shipping.address, size: "xxs", color: "#777777", margin: "xs", wrap: true },
+              { type: "text", text: `${shipping.subDistrict} ${shipping.district}`, size: "xxs", color: "#777777", margin: "xs", wrap: true },
+              { type: "text", text: `${shipping.province} ${shipping.postalCode}`, size: "xxs", color: "#777777", margin: "xs", wrap: true },
               { type: "text", text: `Tel: ${shipping.phone}`, size: "xxs", color: "#777777", margin: "xs" },
             ],
           },

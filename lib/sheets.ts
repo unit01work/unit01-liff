@@ -8,11 +8,16 @@ export interface OrderRow {
   "Status": string;
   "Items": string;
   "Subtotal": number;
-  "Shipping": number;
+  "Shipping Fee": number;
   "Total": number;
-  "Name": string;
+  "First Name": string;
+  "Last Name": string;
   "Phone": string;
   "Address": string;
+  "Sub-district": string;
+  "District": string;
+  "Province": string;
+  "Postal Code": string;
   "Updated At": string;
 }
 
@@ -57,8 +62,10 @@ function nowBKK(): string {
 
 const HEADERS = [
   "Order ID", "Date", "LINE User ID", "Status",
-  "Items", "Subtotal", "Shipping", "Total",
-  "Name", "Phone", "Address", "Updated At",
+  "Items", "Subtotal", "Shipping Fee", "Total",
+  "First Name", "Last Name", "Phone", "Address",
+  "Sub-district", "District", "Province", "Postal Code",
+  "Updated At",
 ];
 
 async function getOrCreateSheet(doc: GoogleSpreadsheet) {
@@ -85,11 +92,14 @@ export async function appendOrder(data: {
   sub: number;
   ship: number;
   total: number;
-  name: string;
+  firstName: string;
+  lastName: string;
   phone: string;
   address: string;
-  city: string;
-  zip: string;
+  subDistrict: string;
+  district: string;
+  province: string;
+  postalCode: string;
 }) {
   const doc = getDoc();
   await doc.loadInfo();
@@ -99,7 +109,6 @@ export async function appendOrder(data: {
     .map((c) => `${c.name} (${c.size}) x${c.qty}`)
     .join(", ");
 
-  const fullAddress = `${data.address}, ${data.city} ${data.zip}`;
   const now = nowBKK();
 
   await sheet.addRow({
@@ -109,11 +118,16 @@ export async function appendOrder(data: {
     "Status": "PENDING",
     "Items": itemsStr,
     "Subtotal": data.sub,
-    "Shipping": data.ship,
+    "Shipping Fee": data.ship,
     "Total": data.total,
-    "Name": data.name,
+    "First Name": data.firstName,
+    "Last Name": data.lastName,
     "Phone": data.phone,
-    "Address": fullAddress,
+    "Address": data.address,
+    "Sub-district": data.subDistrict,
+    "District": data.district,
+    "Province": data.province,
+    "Postal Code": data.postalCode,
     "Updated At": now,
   });
 }
@@ -136,18 +150,32 @@ export async function getOrder(orderId: string): Promise<OrderRow | null> {
     "Status": row.get("Status"),
     "Items": row.get("Items"),
     "Subtotal": Number(row.get("Subtotal")),
-    "Shipping": Number(row.get("Shipping")),
+    "Shipping Fee": Number(row.get("Shipping Fee")),
     "Total": Number(row.get("Total")),
-    "Name": row.get("Name"),
+    "First Name": row.get("First Name"),
+    "Last Name": row.get("Last Name"),
     "Phone": row.get("Phone"),
     "Address": row.get("Address"),
+    "Sub-district": row.get("Sub-district"),
+    "District": row.get("District"),
+    "Province": row.get("Province"),
+    "Postal Code": row.get("Postal Code"),
     "Updated At": row.get("Updated At"),
   };
 }
 
 export async function updateOrderShipping(
   orderId: string,
-  data: { name: string; phone: string; address: string; city: string; zip: string }
+  data: {
+    firstName: string;
+    lastName: string;
+    phone: string;
+    address: string;
+    subDistrict: string;
+    district: string;
+    province: string;
+    postalCode: string;
+  }
 ): Promise<boolean> {
   const doc = getDoc();
   await doc.loadInfo();
@@ -158,13 +186,14 @@ export async function updateOrderShipping(
   const row = rows.find((r) => r.get("Order ID") === orderId);
   if (!row) return false;
 
-  const fullAddress = data.city || data.zip
-    ? `${data.address}, ${data.city} ${data.zip}`.trim()
-    : data.address;
-
-  row.set("Name", data.name);
+  row.set("First Name", data.firstName);
+  row.set("Last Name", data.lastName);
   row.set("Phone", data.phone);
-  row.set("Address", fullAddress);
+  row.set("Address", data.address);
+  row.set("Sub-district", data.subDistrict);
+  row.set("District", data.district);
+  row.set("Province", data.province);
+  row.set("Postal Code", data.postalCode);
   row.set("Updated At", nowBKK());
   await row.save();
   return true;
@@ -179,10 +208,6 @@ export async function ensureHeaders() {
   }
   const rows = await sheet.getRows();
   if (rows.length === 0) {
-    await sheet.setHeaderRow([
-      "Order ID", "Date", "LINE User ID", "Status",
-      "Items", "Subtotal", "Shipping", "Total",
-      "Name", "Phone", "Address", "Updated At",
-    ]);
+    await sheet.setHeaderRow(HEADERS);
   }
 }

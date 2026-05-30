@@ -32,9 +32,18 @@ export async function PUT(
 ) {
   try {
     const { orderId } = await params;
-    const body: { name: string; phone: string; address: string; city: string; zip: string } = await request.json();
+    const body: {
+      firstName: string;
+      lastName: string;
+      phone: string;
+      address: string;
+      subDistrict: string;
+      district: string;
+      province: string;
+      postalCode: string;
+    } = await request.json();
 
-    if (!body.name || !body.phone || !body.address || !body.city || !body.zip) {
+    if (!body.firstName || !body.lastName || !body.phone || !body.address || !body.postalCode) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
@@ -50,7 +59,7 @@ export async function PUT(
       try {
         const client = getLineClient();
         const total = order["Total"];
-        const ship = order["Shipping"];
+        const ship = order["Shipping Fee"];
 
         // Rebuild cart-like structure from stored items string
         const cartSimple = [{ name: order["Items"], size: "", price: total - ship, qty: 1 }];
@@ -60,11 +69,14 @@ export async function PUT(
         const qrUrl = `${BASE_URL}/api/qr/${orderId}?amount=${storedAmount}`;
 
         const shippingInfo = {
-          name: body.name,
+          firstName: body.firstName,
+          lastName: body.lastName,
           phone: body.phone,
           address: body.address,
-          city: body.city,
-          zip: body.zip,
+          subDistrict: body.subDistrict,
+          district: body.district,
+          province: body.province,
+          postalCode: body.postalCode,
         };
 
         const flexMsg = buildOrderFlex({

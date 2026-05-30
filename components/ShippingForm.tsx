@@ -5,45 +5,57 @@ import { C, FM, FT, fmt } from "@/lib/tokens";
 import { BackIcon } from "./Icons";
 import { SectHead, BracketChain } from "./MicroGraphics";
 import type { CartItem } from "./Cart";
+import type { ZipResult } from "@/lib/thai-zipcode";
 
 export interface ShippingInfo {
-  name: string;
+  firstName: string;
+  lastName: string;
   phone: string;
   address: string;
-  city: string;
-  zip: string;
+  postalCode: string;
+  subDistrict: string;
+  district: string;
+  province: string;
 }
 
-/* Field component defined OUTSIDE to prevent re-creation on every render */
+/* ── Field component defined OUTSIDE to prevent re-creation on every render ── */
 function Fld({
   label,
   field,
   ph,
   area,
+  maxLen,
   value,
   error,
+  readOnly,
+  autoFilled,
+  autoTag,
   onChange,
 }: {
   label: string;
   field: string;
   ph: string;
   area?: boolean;
+  maxLen?: number;
   value: string;
   error: boolean;
+  readOnly?: boolean;
+  autoFilled?: boolean;
+  autoTag?: boolean;
   onChange: (field: string, value: string) => void;
 }) {
   const style: React.CSSProperties = {
-    background: C.white,
+    background: autoFilled ? "#E5E0DD" : C.white,
     color: C.mist,
-    border: `1px solid ${error ? C.err : C.bdr}`,
-    padding: "16px 14px",
-    borderRadius: 2,
+    border: `1.5px solid ${error ? C.err : "#D4CFC9"}`,
+    padding: "14px 16px",
+    borderRadius: 0,
     fontFamily: FT,
-    fontSize: 16,
+    fontSize: 14,
     lineHeight: 1.3,
     outline: "none",
     width: "100%",
-    boxSizing: "border-box",
+    boxSizing: "border-box" as const,
   };
 
   return (
@@ -52,13 +64,30 @@ function Fld({
         style={{
           fontFamily: FM,
           fontSize: 10,
-          letterSpacing: "0.14em",
+          letterSpacing: "0.15em",
           textTransform: "uppercase",
-          color: C.oliva,
-          fontWeight: 500,
+          color: C.gris,
+          fontWeight: 600,
         }}
       >
         {label}
+        {autoTag && (
+          <span
+            style={{
+              display: "inline-block",
+              fontSize: 8,
+              letterSpacing: "0.1em",
+              color: C.orange,
+              border: `1px solid ${C.orange}`,
+              padding: "1px 5px",
+              marginLeft: 4,
+              verticalAlign: "middle",
+              fontWeight: 700,
+            }}
+          >
+            AUTO-FILL
+          </span>
+        )}
       </label>
       {area ? (
         <textarea
@@ -66,7 +95,8 @@ function Fld({
           onChange={(e) => onChange(field, e.target.value)}
           placeholder={ph}
           rows={3}
-          style={{ ...style, resize: "none" }}
+          style={{ ...style, resize: "none", minHeight: 70, lineHeight: 1.5 }}
+          readOnly={readOnly}
         />
       ) : (
         <input
@@ -74,8 +104,37 @@ function Fld({
           onChange={(e) => onChange(field, e.target.value)}
           placeholder={ph}
           style={style}
+          readOnly={readOnly}
+          maxLength={maxLen}
         />
       )}
+    </div>
+  );
+}
+
+/* ── Dropdown item ── */
+function DropdownItem({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        padding: "12px 16px",
+        fontSize: 12,
+        fontFamily: FM,
+        cursor: "pointer",
+        borderBottom: `1px solid #EBE7E4`,
+        transition: "background 0.15s",
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "#F4EFEC")}
+      onMouseLeave={(e) => (e.currentTarget.style.background = "#FFF")}
+    >
+      {label}
     </div>
   );
 }
@@ -90,23 +149,93 @@ export function ScreenShipping({
   onConfirm: (form: ShippingInfo) => void;
 }) {
   const [form, setForm] = useState<ShippingInfo>({
-    name: "",
+    firstName: "",
+    lastName: "",
     phone: "",
     address: "",
-    city: "",
-    zip: "",
+    postalCode: "",
+    subDistrict: "",
+    district: "",
+    province: "",
   });
   const [err, setErr] = useState<Record<string, boolean>>({});
+  const [zipResults, setZipResults] = useState<ZipResult[]>([]);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [autoFilled, setAutoFilled] = useState(false);
+  const [zipNotFound, setZipNotFound] = useState(false);
   const sub = cart.reduce((s, c) => s + c.price * c.qty, 0);
 
   const upd = useCallback((k: string, v: string) => {
     setForm((p) => ({ ...p, [k]: v }));
     setErr((p) => (p[k] ? { ...p, [k]: false } : p));
+
+    // Auto-fill logic for postal code
+    if (k === "postalCode") {
+      if (v.length === 5 && /^\d{5}$/.test(v)) {
+        // Dynamic import + async lookup
+        import("@/lib/thai-zipcode").then(({ lookupZip }) => {
+          const results = lookupZip(v);
+          if (results.length === 1) {
+            // Single result — auto-fill immediately
+            setForm((p) => ({
+              ...p,
+              subDistrict: results[0].subDistrict,
+              district: results[0].district,
+              province: results[0].province,
+            }));
+            setAutoFilled(true);
+            setZipNotFound(false);
+            setShowDropdown(false);
+            setZipResults([]);
+          } else if (results.length > 1) {
+            // Multiple results — show dropdown
+            setZipResults(results);
+            setShowDropdown(true);
+            setAutoFilled(false);
+            setZipNotFound(false);
+            // Clear previous values
+            setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
+          } else {
+            // Not found — let user type manually
+            setZipNotFound(true);
+            setAutoFilled(false);
+            setShowDropdown(false);
+            setZipResults([]);
+            setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
+          }
+        });
+      } else {
+        // Clear auto-fill state
+        setShowDropdown(false);
+        setZipResults([]);
+        if (v.length < 5) {
+          setAutoFilled(false);
+          setZipNotFound(false);
+          setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
+        }
+      }
+    }
+  }, []);
+
+  const pickZipResult = useCallback((result: ZipResult) => {
+    setForm((p) => ({
+      ...p,
+      subDistrict: result.subDistrict,
+      district: result.district,
+      province: result.province,
+    }));
+    setAutoFilled(true);
+    setShowDropdown(false);
+    setZipResults([]);
   }, []);
 
   const validate = () => {
     const e: Record<string, boolean> = {};
-    (["name", "phone", "address", "city", "zip"] as const).forEach((k) => {
+    const required: (keyof ShippingInfo)[] = [
+      "firstName", "lastName", "phone", "address", "postalCode",
+      "subDistrict", "district", "province",
+    ];
+    required.forEach((k) => {
       if (!form[k].trim()) e[k] = true;
     });
     setErr(e);
@@ -116,6 +245,8 @@ export function ScreenShipping({
   const submit = () => {
     if (validate()) onConfirm(form);
   };
+
+  const isAutoReadonly = autoFilled && !zipNotFound;
 
   return (
     <>
@@ -212,16 +343,48 @@ export function ScreenShipping({
             padding: "20px 16px 32px",
             display: "flex",
             flexDirection: "column",
-            gap: 20,
+            gap: 18,
           }}
         >
-          <Fld label="FULL NAME" field="name" ph="Trai Nimtawat" value={form.name} error={!!err.name} onChange={upd} />
-          <Fld label="PHONE NUMBER" field="phone" ph="081 234 5678" value={form.phone} error={!!err.phone} onChange={upd} />
-          <Fld label="SHIPPING ADDRESS" field="address" ph="99/1 Sukhumvit Rd, Khlong Toei" area value={form.address} error={!!err.address} onChange={upd} />
+          {/* First Name / Last Name */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Fld label="CITY / PROVINCE" field="city" ph="Bangkok" value={form.city} error={!!err.city} onChange={upd} />
-            <Fld label="POSTAL CODE" field="zip" ph="10110" value={form.zip} error={!!err.zip} onChange={upd} />
+            <Fld label="FIRST NAME" field="firstName" ph="First name" value={form.firstName} error={!!err.firstName} onChange={upd} />
+            <Fld label="LAST NAME" field="lastName" ph="Last name" value={form.lastName} error={!!err.lastName} onChange={upd} />
           </div>
+
+          {/* Phone */}
+          <Fld label="PHONE NUMBER" field="phone" ph="08X-XXX-XXXX" value={form.phone} error={!!err.phone} onChange={upd} />
+
+          {/* Address */}
+          <Fld label="ADDRESS" field="address" ph="House no. Street Soi" area value={form.address} error={!!err.address} onChange={upd} />
+
+          {/* Postal Code */}
+          <div>
+            <Fld label="POSTAL CODE" field="postalCode" ph="10XXX" maxLen={5} value={form.postalCode} error={!!err.postalCode} onChange={upd} autoTag />
+            {/* Hint */}
+            {showDropdown && zipResults.length > 0 && (
+              <div style={{ fontSize: 10, color: C.orange, marginTop: 4, letterSpacing: "0.03em", fontFamily: FM }}>
+                {"↓ Select your sub-district"}
+              </div>
+            )}
+            {/* Dropdown */}
+            {showDropdown && zipResults.length > 0 && (
+              <div style={{ border: `1.5px solid ${C.orange}`, borderTop: "none", background: C.white }}>
+                {zipResults.map((r, i) => (
+                  <DropdownItem key={i} label={`${r.subDistrict} / ${r.district}`} onClick={() => pickZipResult(r)} />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Sub-district / District */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Fld label="SUB-DISTRICT" field="subDistrict" ph="Sub-district" value={form.subDistrict} error={!!err.subDistrict} onChange={upd} readOnly={isAutoReadonly} autoFilled={isAutoReadonly} />
+            <Fld label="DISTRICT" field="district" ph="District" value={form.district} error={!!err.district} onChange={upd} readOnly={isAutoReadonly} autoFilled={isAutoReadonly} />
+          </div>
+
+          {/* Province */}
+          <Fld label="PROVINCE" field="province" ph="Province" value={form.province} error={!!err.province} onChange={upd} readOnly={isAutoReadonly} autoFilled={isAutoReadonly} />
         </div>
 
         <div
@@ -240,7 +403,7 @@ export function ScreenShipping({
         style={{
           position: "sticky",
           bottom: 0,
-          background: "rgba(244,239,236,0.96)",
+          background: "rgba(255,255,255,0.96)",
           backdropFilter: "blur(16px)",
           borderTop: `1px solid ${C.light}`,
           padding: "12px 16px 14px",
@@ -261,7 +424,7 @@ export function ScreenShipping({
             letterSpacing: "0.1em",
             textTransform: "uppercase",
             cursor: "pointer",
-            borderRadius: 2,
+            borderRadius: 0,
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",

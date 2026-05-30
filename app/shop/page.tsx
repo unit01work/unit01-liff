@@ -26,25 +26,35 @@ function ShopPageInner() {
   return <ShopFlow />;
 }
 
-// Parse "address, city zip" back into separate fields
-function parseAddress(full: string): { address: string; city: string; zip: string } {
-  const m = full.match(/^(.+),\s*(.+?)\s+(\d{5})\s*$/);
-  if (m) return { address: m[1].trim(), city: m[2].trim(), zip: m[3].trim() };
-  return { address: full, city: "", zip: "" };
-}
-
 // Loads order data then shows edit form
 function EditPageLoader({ orderId }: { orderId: string }) {
   const [loading, setLoading] = useState(true);
-  const [order, setOrder] = useState<{ Name: string; Phone: string; Address: string; City: string; Zip: string } | null>(null);
+  const [order, setOrder] = useState<{
+    firstName: string;
+    lastName: string;
+    phone: string;
+    address: string;
+    subDistrict: string;
+    district: string;
+    province: string;
+    postalCode: string;
+  } | null>(null);
   const [fetchErr, setFetchErr] = useState(false);
 
   useEffect(() => {
     fetch(`/api/order/${orderId}`)
       .then((r) => r.json())
       .then((data) => {
-        const { address, city, zip } = parseAddress(data["Address"] || "");
-        setOrder({ Name: data["Name"] || "", Phone: data["Phone"] || "", Address: address, City: city, Zip: zip });
+        setOrder({
+          firstName: data["First Name"] || "",
+          lastName: data["Last Name"] || "",
+          phone: data["Phone"] || "",
+          address: data["Address"] || "",
+          subDistrict: data["Sub-district"] || "",
+          district: data["District"] || "",
+          province: data["Province"] || "",
+          postalCode: data["Postal Code"] || "",
+        });
         setLoading(false);
       })
       .catch(() => { setFetchErr(true); setLoading(false); });
@@ -82,11 +92,14 @@ function EditPageLoader({ orderId }: { orderId: string }) {
   return (
     <EditForm
       orderId={orderId}
-      initialName={order.Name}
-      initialPhone={order.Phone}
-      initialAddress={order.Address}
-      initialCity={order.City}
-      initialZip={order.Zip}
+      initialFirstName={order.firstName}
+      initialLastName={order.lastName}
+      initialPhone={order.phone}
+      initialAddress={order.address}
+      initialSubDistrict={order.subDistrict}
+      initialDistrict={order.district}
+      initialProvince={order.province}
+      initialPostalCode={order.postalCode}
       onClose={handleClose}
     />
   );

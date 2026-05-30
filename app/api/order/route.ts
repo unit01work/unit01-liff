@@ -14,11 +14,14 @@ interface CartItem {
 interface OrderBody {
   cart: CartItem[];
   shipping: {
-    name: string;
+    firstName: string;
+    lastName: string;
     phone: string;
     address: string;
-    city: string;
-    zip: string;
+    postalCode: string;
+    subDistrict: string;
+    district: string;
+    province: string;
   };
   lineUserId: string;
 }
@@ -33,7 +36,7 @@ export async function POST(request: NextRequest) {
   try {
     const body: OrderBody = await request.json();
 
-    if (!body.cart?.length || !body.shipping?.name) {
+    if (!body.cart?.length || !body.shipping?.firstName) {
       return NextResponse.json({ error: "Invalid order data" }, { status: 400 });
     }
 
@@ -67,11 +70,14 @@ export async function POST(request: NextRequest) {
         sub,
         ship,
         total,
-        name: shipping.name,
+        firstName: shipping.firstName,
+        lastName: shipping.lastName,
         phone: shipping.phone,
         address: shipping.address,
-        city: shipping.city,
-        zip: shipping.zip,
+        subDistrict: shipping.subDistrict,
+        district: shipping.district,
+        province: shipping.province,
+        postalCode: shipping.postalCode,
       });
       console.log("✅ Saved to Google Sheets");
     } catch (sheetErr) {
