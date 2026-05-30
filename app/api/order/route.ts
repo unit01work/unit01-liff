@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getLineClient } from "@/lib/line";
 import { saveOrder } from "@/lib/order-store";
 import { buildOrderFlex } from "@/lib/flex-order";
-import { fmt } from "@/lib/tokens";
+import { appendOrder } from "@/lib/sheets";
 
 interface CartItem {
   name: string;
@@ -42,43 +42,50 @@ export async function POST(request: NextRequest) {
     const sub = cart.reduce((s, c) => s + c.price * c.qty, 0);
     const ship = 50;
     const total = sub + ship;
-
-    // Save order amount for QR generation
     const orderIdClean = orderId.replace("#", "");
-    saveOrder(orderIdClean, total);
 
     // Build QR URL
     const host = request.headers.get("host") || "unit01-liff.vercel.app";
     const protocol = host.includes("localhost") ? "http" : "https";
     const qrUrl = `${protocol}://${host}/api/qr/${orderIdClean}?amount=${total}`;
 
-    // Build order text for fallback
-    const items = cart
-      .map(
-        (c) =>
-          `• ${c.name} (${c.size}) ×${c.qty} — ฿${(c.price * c.qty).toLocaleString("en-US")}`
-      )
-      .join("\n");
-
-    const orderText = `🛒 Order ${orderId}\n${items}\nTotal: ฿${total.toLocaleString("en-US")}`;
-
     console.log("=== NEW ORDER ===");
     console.log("Order ID:", orderId);
     console.log("Total:", total);
     console.log("LINE User:", body.lineUserId);
-    console.log("Items:", JSON.stringify(body.cart, null, 2));
-    console.log("Shipping:", JSON.stringify(body.shipping, null, 2));
-    console.log("QR URL:", qrUrl);
     console.log("=================");
 
-    // Send Flex Message via push
+    // 1. Save order amount for QR generation (in-memory)
+    saveOrder(orderIdClean, total);
+
+    // 2. Save to Google Sheets
+    try {
+      await appendOrder({
+        orderId,
+        lineUserId: body.lineUserId,
+        items: cart,
+        sub,
+        ship,
+        total,
+        name: shipping.name,
+        phone: shipping.phone,
+        address: shipping.address,
+        city: shipping.city,
+        zip: shipping.zip,
+      });
+      console.log("Saved to Google Sheets");
+    } catch (sheetErr) {
+      console.error("Google Sheets save failed:", sheetErr);
+      // Don't block the order if Sheets fails
+    }
+
+    // 3. Send Flex Message
     if (
       body.lineUserId &&
       process.env.LINE_CHANNEL_ACCESS_TOKEN &&
       process.env.LINE_CHANNEL_ACCESS_TOKEN !== "YOUR_CHANNEL_ACCESS_TOKEN_HERE"
     ) {
       const client = getLineClient();
-
       try {
         const flexMsg = buildOrderFlex({
           orderId,
@@ -89,39 +96,19 @@ export async function POST(request: NextRequest) {
           qrUrl,
           liffUrl: LIFF_URL,
         });
-
-        await client.pushMessage({
-          to: body.lineUserId,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          messages: [flexMsg as any],
-        });
-        console.log("LINE Flex Message sent");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await client.pushMessage({ to: body.lineUserId, messages: [flexMsg as any] });
+        console.log("Flex Message sent");
       } catch (flexErr: unknown) {
-        // Log full LINE API error body for debugging
-        if (flexErr && typeof flexErr === "object" && "response" in flexErr) {
-          const r = flexErr.response as { status?: number; data?: unknown };
-          console.error("LINE API error status:", r.status);
-          console.error("LINE API error body:", JSON.stringify(r.data));
+        if (flexErr && typeof flexErr === "object" && "body" in flexErr) {
+          console.error("LINE API error:", String((flexErr as { body: unknown }).body));
         } else {
           console.error("Flex message failed:", String(flexErr));
-        }
-        console.error("Flex message failed, sending text fallback:", flexErr);
-        // Fallback to plain text
-        try {
-          await client.pushMessage({
-            to: body.lineUserId,
-            messages: [
-              { type: "text", text: orderText },
-              { type: "text", text: `💳 สแกนจ่าย PromptPay ${fmt(total)}\nกรุณาชำระภายใน 24 ชม.\nแล้วส่งสลิปมาที่แชทนี้` },
-            ],
-          });
-          console.log("Fallback text message sent");
-        } catch (textErr) {
-          console.error("Text fallback also failed:", textErr);
         }
       }
     }
 
+    const orderText = `Order ${orderId} — Total ฿${total.toLocaleString("en-US")}`;
     return NextResponse.json({ orderId, orderText });
   } catch (err) {
     console.error("Order error:", err);
