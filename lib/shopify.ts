@@ -72,7 +72,7 @@ export async function createShopifyDraftOrder(
   console.log("[shopify] Creating draft order:", JSON.stringify(body));
 
   const response = await fetch(
-    `https://${process.env.SHOPIFY_STORE}/admin/api/2025-01/draft_orders.json`,
+    `https://${process.env.SHOPIFY_STORE}/admin/api/2026-04/draft_orders.json`,
     {
       method: "POST",
       headers: {

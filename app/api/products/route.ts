@@ -22,7 +22,7 @@ interface ShopifyProduct {
 export async function GET() {
   try {
     const response = await fetch(
-      `https://${process.env.SHOPIFY_STORE}/admin/api/2025-01/products.json?status=active&fields=id,title,variants,images,tags`,
+      `https://${process.env.SHOPIFY_STORE}/admin/api/2026-04/products.json?status=active&fields=id,title,variants,images,tags`,
       {
         headers: {
           "X-Shopify-Access-Token": process.env.SHOPIFY_ADMIN_API_TOKEN!,
@@ -32,8 +32,9 @@ export async function GET() {
     );
 
     if (!response.ok) {
-      console.error("[products] Shopify API error:", response.status);
-      return NextResponse.json({ products: [] }, { status: 500 });
+      const errText = await response.text();
+      console.error("[products] Shopify API error:", response.status, errText);
+      return NextResponse.json({ products: [], error: `Shopify ${response.status}` }, { status: 500 });
     }
 
     const data = await response.json();
