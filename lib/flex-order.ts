@@ -34,16 +34,14 @@ export function buildOrderFlex({
   qrUrl: string;
   liffUrl: string;
 }) {
-  // Build item rows
+  // Build item rows — no spacers (LINE: spacer must be first or last)
   const itemBoxes: Record<string, unknown>[] = [];
   cart.forEach((c, i) => {
-    if (i > 0) {
-      itemBoxes.push({ type: "spacer", size: "md" });
-    }
     itemBoxes.push(
       {
         type: "box",
         layout: "horizontal",
+        margin: i > 0 ? "md" : "sm",   // top margin instead of spacer
         contents: [
           {
             type: "text",
@@ -68,6 +66,7 @@ export function buildOrderFlex({
         text: `Size ${c.size}  x${c.qty}`,
         size: "xxs",
         color: "#888888",
+        margin: "xs",
       }
     );
   });
@@ -127,7 +126,6 @@ export function buildOrderFlex({
                 color: "#999999",
                 weight: "bold",
               },
-              { type: "spacer", size: "sm" },
               ...itemBoxes,
             ],
           },
