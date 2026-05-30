@@ -22,12 +22,14 @@ export interface CartItem {
 
 export function ScreenCart({
   cart,
+  shippingFee = 50,
   onUpdateQty,
   onRemove,
   onBack,
   onCheckout,
 }: {
   cart: CartItem[];
+  shippingFee?: number;
   onUpdateQty: (id: string, qty: number) => void;
   onRemove: (id: string) => void;
   onBack: () => void;
@@ -35,7 +37,7 @@ export function ScreenCart({
 }) {
   const sub = cart.reduce((s, c) => s + c.price * c.qty, 0);
   const cc = cart.reduce((s, c) => s + c.qty, 0);
-  const ship = 50;
+  const ship = shippingFee;
   const total = sub + ship;
 
   const hdr = (

@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
     const orderId = generateOrderId();
     const { cart, shipping } = body;
     const sub = cart.reduce((s, c) => s + c.price * c.qty, 0);
-    const ship = 50;
+    const ship = parseInt(process.env.SHIPPING_FEE || "50", 10);
     const total = sub + ship;
     const orderIdClean = orderId.replace("#", "");
 

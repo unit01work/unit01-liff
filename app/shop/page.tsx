@@ -112,12 +112,30 @@ function ShopFlow() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orderNo, setOrderNo] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [shippingFee, setShippingFee] = useState(50);
+  const [loadingProducts, setLoadingProducts] = useState(true);
+
+  // Load products from Shopify API
+  useEffect(() => {
+    fetch("/api/products")
+      .then((res) => res.json())
+      .then((data) => {
+        setProducts(data.products || []);
+        if (data.shippingFee != null) setShippingFee(data.shippingFee);
+        setLoadingProducts(false);
+      })
+      .catch((err) => {
+        console.error("Failed to load products:", err);
+        setLoadingProducts(false);
+      });
+  }, []);
 
   const addToCart = useCallback((p: Product, v: Variant) => {
     setCart((prev) => {
       const ex = prev.find((c) => c.variantId === v.id);
       if (ex) return prev.map((c) => c.variantId === v.id ? { ...c, qty: Math.min(c.qty + 1, v.stock) } : c);
-      return [...prev, { cartId: `c-${Date.now()}`, productId: p.id, variantId: v.id, shopifyVariantId: v.shopifyVariantId, name: p.name, size: v.size, price: p.price, image: p.image, qty: 1, maxStock: v.stock }];
+      return [...prev, { cartId: `c-${Date.now()}`, productId: p.id, variantId: v.id, shopifyVariantId: v.shopifyVariantId, name: p.name, size: v.size, price: v.price, image: p.image, qty: 1, maxStock: v.stock }];
     });
   }, []);
 
@@ -166,11 +184,21 @@ function ShopFlow() {
     setSubmitting(false);
   }, []);
 
+  if (loadingProducts) {
+    return (
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: C.cream, flexDirection: "column", gap: 16 }}>
+        <div style={{ width: 24, height: 24, border: `2px solid ${C.bdr}`, borderTopColor: C.mist, borderRadius: "50%", animation: "spin 800ms linear infinite" }} />
+        <div style={{ fontFamily: FM, fontSize: 10, color: C.gris, letterSpacing: "0.14em", textTransform: "uppercase" }}>LOADING PRODUCTS...</div>
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      </div>
+    );
+  }
+
   return (
     <>
-      {screen === "products" && <ScreenProducts cart={cart} onAdd={addToCart} onGoCart={() => setScreen("cart")} />}
-      {screen === "cart" && <ScreenCart cart={cart} onUpdateQty={updateQty} onRemove={removeItem} onBack={() => setScreen("products")} onCheckout={() => setScreen("shipping")} />}
-      {screen === "shipping" && <ScreenShipping cart={cart} onBack={() => setScreen("cart")} onConfirm={handleConfirm} />}
+      {screen === "products" && <ScreenProducts products={products} cart={cart} onAdd={addToCart} onGoCart={() => setScreen("cart")} />}
+      {screen === "cart" && <ScreenCart cart={cart} shippingFee={shippingFee} onUpdateQty={updateQty} onRemove={removeItem} onBack={() => setScreen("products")} onCheckout={() => setScreen("shipping")} />}
+      {screen === "shipping" && <ScreenShipping cart={cart} shippingFee={shippingFee} onBack={() => setScreen("cart")} onConfirm={handleConfirm} />}
       {screen === "closing" && <ClosingOverlay orderNo={orderNo} onReset={handleReset} />}
     </>
   );

@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import Image from "next/image";
 import { C, FM, fmt } from "@/lib/tokens";
-import { PRODUCTS, Product, Variant } from "@/lib/products";
+import type { Product, Variant } from "@/lib/products";
 import { CartIcon, CloseIcon } from "./Icons";
 import { BracketChain, SectHead, MicroDiv, PageStamp } from "./MicroGraphics";
 import { SizeBtn } from "./SizeSelector";
@@ -22,10 +22,12 @@ interface CartItem {
 }
 
 export function ScreenProducts({
+  products,
   cart,
   onAdd,
   onGoCart,
 }: {
+  products: Product[];
   cart: CartItem[];
   onAdd: (p: Product, v: Variant) => void;
   onGoCart: () => void;
@@ -41,6 +43,27 @@ export function ScreenProducts({
     setToast(`${v.size} · ${p.name}`);
     setSel((s) => ({ ...s, [p.id]: null }));
   };
+
+  /** Display price for a product — shows selected variant price or range */
+  const displayPrice = (p: Product) => {
+    const sv = sel[p.id];
+    if (sv) {
+      const v = p.variants.find((v) => v.id === sv);
+      if (v) return fmt(v.price);
+    }
+    if (p.price === p.priceMax) return fmt(p.price);
+    return `${fmt(p.price)} - ${fmt(p.priceMax)}`;
+  };
+
+  /** Get the active price for add-to-cart button */
+  const activePrice = (p: Product): number | null => {
+    const sv = sel[p.id];
+    if (!sv) return null;
+    const v = p.variants.find((v) => v.id === sv);
+    return v && v.stock > 0 ? v.price : null;
+  };
+
+  const allSoldOut = (p: Product) => p.variants.every((v) => v.stock <= 0);
 
   return (
     <>
@@ -130,10 +153,12 @@ export function ScreenProducts({
 
       {/* SCROLLABLE */}
       <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", background: C.cream }}>
-        {PRODUCTS.map((p, idx) => {
+        {products.map((p, idx) => {
           const sv = sel[p.id];
           const variant = p.variants.find((v) => v.id === sv);
           const canAdd = sv && variant && variant.stock > 0;
+          const soldOut = allSoldOut(p);
+          const price = activePrice(p);
           return (
             <div key={p.id}>
               <SectHead num={String(idx + 1).padStart(2, "0")} label="PRODUCT" />
@@ -167,20 +192,22 @@ export function ScreenProducts({
                   style={{ objectFit: "cover" }}
                   priority={idx === 0}
                 />
-                <span
-                  style={{
-                    position: "absolute",
-                    top: 10,
-                    left: 10,
-                    fontFamily: FM,
-                    fontSize: 9,
-                    letterSpacing: "0.14em",
-                    color: "rgba(255,255,255,0.85)",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  {p.lot}
-                </span>
+                {p.lot && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      top: 10,
+                      left: 10,
+                      fontFamily: FM,
+                      fontSize: 9,
+                      letterSpacing: "0.14em",
+                      color: "rgba(255,255,255,0.85)",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    {p.lot}
+                  </span>
+                )}
                 {p.badge && (
                   <span
                     style={{
@@ -235,7 +262,7 @@ export function ScreenProducts({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {fmt(p.price)}
+                  {displayPrice(p)}
                 </span>
               </div>
 
@@ -256,11 +283,11 @@ export function ScreenProducts({
                 {"// SELECT SIZE"}
               </div>
 
-              {/* Size buttons — 28px height */}
+              {/* Size buttons — dynamic columns based on variant count */}
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(4,1fr)",
+                  gridTemplateColumns: `repeat(${Math.min(p.variants.length, 4)},1fr)`,
                   gap: 6,
                   padding: "0 16px 14px",
                 }}
@@ -276,34 +303,59 @@ export function ScreenProducts({
                 ))}
               </div>
 
-              {/* Add to Cart Button */}
+              {/* Add to Cart / Sold Out Button */}
               <div style={{ padding: "0 16px" }}>
-                <button
-                  onClick={() => canAdd && handleAdd(p)}
-                  style={{
-                    width: "100%",
-                    padding: "14px 18px",
-                    background: canAdd ? C.mist : C.light,
-                    color: canAdd ? C.cream : C.gris,
-                    border: "none",
-                    fontFamily: FM,
-                    fontWeight: 700,
-                    fontSize: 12,
-                    letterSpacing: "0.14em",
-                    textTransform: "uppercase",
-                    cursor: canAdd ? "pointer" : "default",
-                    borderRadius: 2,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: canAdd ? "space-between" : "flex-start",
-                    transition: "all 200ms ease",
-                  }}
-                >
-                  <span>{canAdd ? "ADD TO CART" : "SELECT A SIZE"}</span>
-                  {canAdd && <span style={{ fontSize: 11, opacity: 0.7 }}>{fmt(p.price)}</span>}
-                </button>
+                {soldOut ? (
+                  <button
+                    disabled
+                    style={{
+                      width: "100%",
+                      padding: "14px 18px",
+                      background: C.light,
+                      color: C.gris,
+                      border: "none",
+                      fontFamily: FM,
+                      fontWeight: 700,
+                      fontSize: 12,
+                      letterSpacing: "0.14em",
+                      textTransform: "uppercase",
+                      cursor: "default",
+                      borderRadius: 2,
+                      textAlign: "center",
+                    }}
+                  >
+                    SOLD OUT
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => canAdd && handleAdd(p)}
+                    style={{
+                      width: "100%",
+                      padding: "14px 18px",
+                      background: canAdd ? C.mist : C.light,
+                      color: canAdd ? C.cream : C.gris,
+                      border: "none",
+                      fontFamily: FM,
+                      fontWeight: 700,
+                      fontSize: 12,
+                      letterSpacing: "0.14em",
+                      textTransform: "uppercase",
+                      cursor: canAdd ? "pointer" : "default",
+                      borderRadius: 2,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: canAdd ? "space-between" : "flex-start",
+                      transition: "all 200ms ease",
+                    }}
+                  >
+                    <span>{canAdd ? "ADD TO CART" : "SELECT A SIZE"}</span>
+                    {canAdd && price !== null && (
+                      <span style={{ fontSize: 11, opacity: 0.7 }}>{fmt(price)}</span>
+                    )}
+                  </button>
+                )}
               </div>
-              {idx < PRODUCTS.length - 1 && <div style={{ height: 20 }} />}
+              {idx < products.length - 1 && <div style={{ height: 20 }} />}
             </div>
           );
         })}

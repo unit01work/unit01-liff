@@ -141,10 +141,12 @@ function DropdownItem({
 
 export function ScreenShipping({
   cart,
+  shippingFee = 50,
   onBack,
   onConfirm,
 }: {
   cart: CartItem[];
+  shippingFee?: number;
   onBack: () => void;
   onConfirm: (form: ShippingInfo) => void;
 }) {
