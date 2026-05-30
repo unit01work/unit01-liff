@@ -96,7 +96,15 @@ export async function POST(request: NextRequest) {
           messages: [flexMsg as any],
         });
         console.log("LINE Flex Message sent");
-      } catch (flexErr) {
+      } catch (flexErr: unknown) {
+        // Log full LINE API error body for debugging
+        if (flexErr && typeof flexErr === "object" && "response" in flexErr) {
+          const r = flexErr.response as { status?: number; data?: unknown };
+          console.error("LINE API error status:", r.status);
+          console.error("LINE API error body:", JSON.stringify(r.data));
+        } else {
+          console.error("Flex message failed:", String(flexErr));
+        }
         console.error("Flex message failed, sending text fallback:", flexErr);
         // Fallback to plain text
         try {
