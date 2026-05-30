@@ -32,6 +32,29 @@ function nowBKK(): string {
   }).replace("T", " ").slice(0, 16);
 }
 
+const HEADERS = [
+  "Order ID", "Date", "LINE User ID", "Status",
+  "Items", "Subtotal", "Shipping", "Total",
+  "Name", "Phone", "Address", "Updated At",
+];
+
+async function getOrCreateSheet(doc: GoogleSpreadsheet) {
+  let sheet = doc.sheetsByTitle["Orders"];
+  if (!sheet) {
+    console.log("Creating 'Orders' sheet...");
+    sheet = await doc.addSheet({ title: "Orders", headerValues: HEADERS });
+  } else {
+    // Ensure headers exist (sheet might be empty)
+    try {
+      await sheet.loadHeaderRow();
+    } catch {
+      console.log("Setting header row...");
+      await sheet.setHeaderRow(HEADERS);
+    }
+  }
+  return sheet;
+}
+
 export async function appendOrder(data: {
   orderId: string;
   lineUserId: string;
@@ -47,8 +70,7 @@ export async function appendOrder(data: {
 }) {
   const doc = getDoc();
   await doc.loadInfo();
-  const sheet = doc.sheetsByTitle["Orders"];
-  if (!sheet) throw new Error("Sheet 'Orders' not found");
+  const sheet = await getOrCreateSheet(doc);
 
   const itemsStr = data.items
     .map((c) => `${c.name} (${c.size}) x${c.qty}`)
@@ -78,6 +100,7 @@ export async function getOrder(orderId: string): Promise<OrderRow | null> {
   await doc.loadInfo();
   const sheet = doc.sheetsByTitle["Orders"];
   if (!sheet) return null;
+  try { await sheet.loadHeaderRow(); } catch { return null; }
 
   const rows = await sheet.getRows();
   const row = rows.find((r) => r.get("Order ID") === orderId);

@@ -73,9 +73,9 @@ export async function POST(request: NextRequest) {
         city: shipping.city,
         zip: shipping.zip,
       });
-      console.log("Saved to Google Sheets");
+      console.log("✅ Saved to Google Sheets");
     } catch (sheetErr) {
-      console.error("Google Sheets save failed:", sheetErr);
+      console.error("❌ Google Sheets save failed:", sheetErr instanceof Error ? sheetErr.message : String(sheetErr));
       // Don't block the order if Sheets fails
     }
 

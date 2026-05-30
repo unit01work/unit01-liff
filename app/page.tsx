@@ -5,6 +5,13 @@ import { useRouter } from "next/navigation";
 import { C, FM } from "@/lib/tokens";
 import { useUser } from "@/lib/user-context";
 
+// Preserve query params from current URL when redirecting to /shop
+function shopUrl(): string {
+  if (typeof window === "undefined") return "/shop";
+  const qs = window.location.search;
+  return qs ? `/shop${qs}` : "/shop";
+}
+
 export default function Home() {
   const router = useRouter();
   const { setProfile } = useUser();
@@ -31,12 +38,12 @@ export default function Home() {
         });
 
         setStatus("สำเร็จ — กำลังเปิดร้านค้า...");
-        router.replace("/shop");
+        router.replace(shopUrl());
       } catch (e) {
         console.error("LIFF init error:", e);
         setError(true);
         setStatus("ไม่สามารถเชื่อมต่อ LIFF ได้");
-        setTimeout(() => router.replace("/shop"), 1500);
+        setTimeout(() => router.replace(shopUrl()), 1500);
       }
     }
     init();
