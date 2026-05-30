@@ -17,10 +17,19 @@ export interface OrderRow {
 }
 
 function getPrivateKey(): string {
+  // Priority 1: Base64-encoded key (most reliable for Vercel)
+  const b64 = process.env.GOOGLE_PRIVATE_KEY_BASE64 || "";
+  if (b64) {
+    const decoded = Buffer.from(b64, "base64").toString("utf-8");
+    // The base64 value wraps the original .env.local value which has literal \n
+    if (decoded.includes("\\n")) {
+      return decoded.split("\\n").join("\n");
+    }
+    return decoded;
+  }
+
+  // Priority 2: Plain key (works locally)
   const raw = process.env.GOOGLE_PRIVATE_KEY || "";
-  // Handle all Vercel/env encoding scenarios:
-  // 1. Already has real newlines → use as-is
-  // 2. Has literal \n (2 chars: backslash + n) → replace with real newline
   if (raw.includes("\\n")) {
     return raw.split("\\n").join("\n");
   }

@@ -9,22 +9,24 @@ export async function GET() {
   const sheetsId = process.env.GOOGLE_SHEETS_ID || "";
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "";
   const rawKey = process.env.GOOGLE_PRIVATE_KEY || "";
+  const b64Key = process.env.GOOGLE_PRIVATE_KEY_BASE64 || "";
 
   results["env_SHEETS_ID"] = sheetsId ? `✅ set (${sheetsId.slice(0, 8)}...)` : "❌ MISSING";
   results["env_SERVICE_ACCOUNT_EMAIL"] = email ? `✅ ${email}` : "❌ MISSING";
   results["env_PRIVATE_KEY_length"] = rawKey.length;
-  results["env_PRIVATE_KEY_starts"] = rawKey.slice(0, 30);
-  results["env_PRIVATE_KEY_ends"] = rawKey.slice(-30);
+  results["env_PRIVATE_KEY_BASE64_length"] = b64Key.length;
   results["env_PRIVATE_KEY_has_literal_backslash_n"] = rawKey.includes("\\n");
   results["env_PRIVATE_KEY_has_real_newline"] = rawKey.includes("\n");
   results["env_PRIVATE_KEY_has_BEGIN"] = rawKey.includes("-----BEGIN PRIVATE KEY-----");
-  results["env_PRIVATE_KEY_has_END"] = rawKey.includes("-----END PRIVATE KEY-----");
 
-  // Step 2: Process key
+  // Step 2: Process key — prefer Base64
   let processedKey: string;
   try {
-    // Try multiple strategies
-    if (rawKey.includes("\\n")) {
+    if (b64Key) {
+      const decoded = Buffer.from(b64Key, "base64").toString("utf-8");
+      processedKey = decoded.includes("\\n") ? decoded.split("\\n").join("\n") : decoded;
+      results["key_strategy"] = "✅ using GOOGLE_PRIVATE_KEY_BASE64";
+    } else if (rawKey.includes("\\n")) {
       processedKey = rawKey.split("\\n").join("\n");
       results["key_strategy"] = "split on literal \\n";
     } else if (rawKey.includes("\n")) {
