@@ -22,7 +22,7 @@ interface ShopifyProduct {
 export async function GET() {
   try {
     const response = await fetch(
-      `https://${process.env.SHOPIFY_STORE}/admin/api/2024-01/products.json?status=active&fields=id,title,variants,images,tags`,
+      `https://${process.env.SHOPIFY_STORE}/admin/api/2025-01/products.json?status=active&fields=id,title,variants,images,tags`,
       {
         headers: {
           "X-Shopify-Access-Token": process.env.SHOPIFY_ADMIN_API_TOKEN!,
