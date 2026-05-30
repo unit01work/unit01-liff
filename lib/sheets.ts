@@ -132,6 +132,14 @@ export async function appendOrder(data: {
   });
 }
 
+// Match orderId with or without # prefix
+function matchOrderId(stored: string, search: string): boolean {
+  if (stored === search) return true;
+  if (stored === `#${search}`) return true;
+  if (search === `#${stored}`) return true;
+  return false;
+}
+
 export async function getOrder(orderId: string): Promise<OrderRow | null> {
   const doc = getDoc();
   await doc.loadInfo();
@@ -140,7 +148,7 @@ export async function getOrder(orderId: string): Promise<OrderRow | null> {
   try { await sheet.loadHeaderRow(); } catch { return null; }
 
   const rows = await sheet.getRows();
-  const row = rows.find((r) => r.get("Order ID") === orderId);
+  const row = rows.find((r) => matchOrderId(r.get("Order ID") || "", orderId));
   if (!row) return null;
 
   return {
@@ -183,7 +191,7 @@ export async function updateOrderShipping(
   if (!sheet) return false;
 
   const rows = await sheet.getRows();
-  const row = rows.find((r) => r.get("Order ID") === orderId);
+  const row = rows.find((r) => matchOrderId(r.get("Order ID") || "", orderId));
   if (!row) return false;
 
   row.set("First Name", data.firstName);
