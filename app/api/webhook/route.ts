@@ -249,13 +249,11 @@ async function handleChangeSize(orderId: string) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const messages: any[] = [];
 
-  // Text message with current info + stock
-  const availSizeList = availableSizes
-    .map((s: { size: string; stock: number }) => `[ ${s.size} ] — ${s.stock} left`)
-    .join("\n");
+  // Text message with current info
+  const availSizeList = availableSizes.map((s: { size: string }) => `[ ${s.size} ]`).join(" ");
   messages.push({
     type: "text",
-    text: `CHANGE SIZE\n#${orderId.replace("#", "")}\n${productName}\nCurrent: Size ${currentSize}\n\n${availSizeList}`,
+    text: `CHANGE SIZE\n#${orderId.replace("#", "")}\n${productName}\nCurrent: Size ${currentSize}\nAvailable: ${availSizeList}`,
   });
 
   // Size guide from metafield
