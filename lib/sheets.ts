@@ -329,6 +329,52 @@ export async function updateOrderStatus(
 /**
  * Save Shopify Draft Order ID back to the order row.
  */
+/**
+ * Find the latest order data for a returning customer by LINE userId.
+ * Returns shipping info from their most recent order, or null if not found.
+ */
+export async function findLatestCustomerData(
+  userId: string
+): Promise<{
+  firstName: string;
+  lastName: string;
+  phone: string;
+  address: string;
+  subDistrict: string;
+  district: string;
+  province: string;
+  postalCode: string;
+} | null> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = doc.sheetsByTitle["Orders"];
+  if (!sheet) return null;
+  try { await sheet.loadHeaderRow(); } catch { return null; }
+
+  const rows = await sheet.getRows();
+
+  // Search from last to first (most recent order)
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    if ((row.get("LINE User ID") || "") === userId) {
+      const firstName = row.get("First Name") || "";
+      if (!firstName) continue; // Skip rows without shipping info
+      return {
+        firstName,
+        lastName: row.get("Last Name") || "",
+        phone: row.get("Phone") || "",
+        address: row.get("Address") || "",
+        subDistrict: row.get("Sub-district") || "",
+        district: row.get("District") || "",
+        province: row.get("Province") || "",
+        postalCode: row.get("Postal Code") || "",
+      };
+    }
+  }
+
+  return null;
+}
+
 export async function updateShopifyOrderId(
   orderId: string,
   shopifyOrderId: string

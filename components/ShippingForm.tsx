@@ -142,29 +142,37 @@ function DropdownItem({
 export function ScreenShipping({
   cart,
   shippingFee = 50,
+  prefill,
   onBack,
   onConfirm,
 }: {
   cart: CartItem[];
   shippingFee?: number;
+  prefill?: ShippingInfo | null;
   onBack: () => void;
   onConfirm: (form: ShippingInfo) => void;
 }) {
-  const [form, setForm] = useState<ShippingInfo>({
-    firstName: "",
-    lastName: "",
-    phone: "",
-    address: "",
-    postalCode: "",
-    subDistrict: "",
-    district: "",
-    province: "",
-  });
+  const [form, setForm] = useState<ShippingInfo>(
+    prefill && prefill.firstName
+      ? prefill
+      : {
+          firstName: "",
+          lastName: "",
+          phone: "",
+          address: "",
+          postalCode: "",
+          subDistrict: "",
+          district: "",
+          province: "",
+        }
+  );
   const [err, setErr] = useState<Record<string, boolean>>({});
   const [zipResults, setZipResults] = useState<ZipResult[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [autoFilled, setAutoFilled] = useState(false);
   const [zipNotFound, setZipNotFound] = useState(false);
+  // If prefill has address data, mark as customer-prefilled (editable, not zip-locked)
+  const [customerPrefilled] = useState(!!(prefill && prefill.firstName));
   const sub = cart.reduce((s, c) => s + c.price * c.qty, 0);
 
   const upd = useCallback((k: string, v: string) => {
@@ -248,7 +256,8 @@ export function ScreenShipping({
     if (validate()) onConfirm(form);
   };
 
-  const isAutoReadonly = autoFilled && !zipNotFound;
+  // Zip-based auto-fill locks fields UNLESS data came from returning customer prefill
+  const isAutoReadonly = autoFilled && !zipNotFound && !customerPrefilled;
 
   return (
     <>

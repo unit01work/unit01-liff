@@ -115,6 +115,19 @@ function ShopFlow() {
   const [products, setProducts] = useState<Product[]>([]);
   const [shippingFee, setShippingFee] = useState(50);
   const [loadingProducts, setLoadingProducts] = useState(true);
+  const [customerPrefill, setCustomerPrefill] = useState<ShippingInfo | null>(null);
+
+  // Load returning customer data
+  useEffect(() => {
+    if (profile?.userId) {
+      fetch(`/api/customer?userId=${profile.userId}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.customer) setCustomerPrefill(data.customer);
+        })
+        .catch(() => { /* ignore */ });
+    }
+  }, [profile?.userId]);
 
   // Load products from Shopify API
   useEffect(() => {
@@ -198,7 +211,7 @@ function ShopFlow() {
     <>
       {screen === "products" && <ScreenProducts products={products} cart={cart} onAdd={addToCart} onGoCart={() => setScreen("cart")} />}
       {screen === "cart" && <ScreenCart cart={cart} shippingFee={shippingFee} onUpdateQty={updateQty} onRemove={removeItem} onBack={() => setScreen("products")} onCheckout={() => setScreen("shipping")} />}
-      {screen === "shipping" && <ScreenShipping cart={cart} shippingFee={shippingFee} onBack={() => setScreen("cart")} onConfirm={handleConfirm} />}
+      {screen === "shipping" && <ScreenShipping cart={cart} shippingFee={shippingFee} prefill={customerPrefill} onBack={() => setScreen("cart")} onConfirm={handleConfirm} />}
       {screen === "closing" && <ClosingOverlay orderNo={orderNo} onReset={handleReset} />}
     </>
   );
