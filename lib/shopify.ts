@@ -301,17 +301,41 @@ export async function getProductVariants(productId: string) {
 }
 
 /**
- * Get product size chart metafield.
+ * Get product size chart image URL via GraphQL (metafield type: file_reference).
  */
 export async function getProductSizeChart(productId: string): Promise<string | null> {
-  const res = await shopifyFetch(
-    `/products/${productId}/metafields.json`
+  const gid = productId.startsWith("gid://")
+    ? productId
+    : `gid://shopify/Product/${productId}`;
+
+  const query = `{
+    product(id: "${gid}") {
+      metafield(namespace: "custom", key: "sizechart") {
+        reference {
+          ... on MediaImage { image { url } }
+          ... on GenericFile { url }
+        }
+      }
+    }
+  }`;
+
+  const res = await fetch(
+    `https://${process.env.SHOPIFY_STORE}/admin/api/2026-04/graphql.json`,
+    {
+      method: "POST",
+      headers: {
+        "X-Shopify-Access-Token": process.env.SHOPIFY_ADMIN_API_TOKEN!,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query }),
+    }
   );
+
   if (!res.ok) return null;
   const data = await res.json();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sizeChart = data.metafields?.find((m: any) =>
-    m.key === "sizechart" || m.key === "size_chart" || m.key === "SIZECHART"
-  );
-  return sizeChart?.value || null;
+  const ref = data?.data?.product?.metafield?.reference;
+  // MediaImage → ref.image.url, GenericFile → ref.url
+  const url = ref?.image?.url || ref?.url || null;
+  console.log("[shopify] Size chart URL:", url);
+  return url;
 }
