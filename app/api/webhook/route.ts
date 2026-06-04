@@ -236,7 +236,7 @@ async function handleChangeSize(orderId: string) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .filter((v: any) => v.inventory_quantity > 0 && v.title.toUpperCase() !== currentSize.toUpperCase())
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .map((v: any) => ({ size: v.title, variantId: String(v.id) }));
+    .map((v: any) => ({ size: v.title, variantId: String(v.id), stock: v.inventory_quantity }));
 
   if (availableSizes.length === 0) {
     return [{
@@ -249,11 +249,13 @@ async function handleChangeSize(orderId: string) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const messages: any[] = [];
 
-  // Text message with current info
-  const availSizeList = availableSizes.map((s: { size: string }) => `[ ${s.size} ]`).join(" ");
+  // Text message with current info + stock
+  const availSizeList = availableSizes
+    .map((s: { size: string; stock: number }) => `[ ${s.size} ] — ${s.stock} left`)
+    .join("\n");
   messages.push({
     type: "text",
-    text: `CHANGE SIZE\n#${orderId.replace("#", "")}\n${productName}\nCurrent: Size ${currentSize}\nAvailable: ${availSizeList}`,
+    text: `CHANGE SIZE\n#${orderId.replace("#", "")}\n${productName}\nCurrent: Size ${currentSize}\n\n${availSizeList}`,
   });
 
   // Size guide from metafield
