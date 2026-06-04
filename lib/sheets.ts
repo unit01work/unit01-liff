@@ -399,6 +399,49 @@ export async function updateShopifyOrderId(
 }
 
 /**
+ * Find the latest order (any status) for a user by LINE userId.
+ */
+export async function findLatestOrderByUser(userId: string): Promise<OrderRow | null> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = doc.sheetsByTitle["Orders"];
+  if (!sheet) return null;
+  try { await sheet.loadHeaderRow(); } catch { return null; }
+
+  const rows = await sheet.getRows();
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    if ((row.get("LINE User ID") || "") === userId) {
+      return {
+        "Order ID": row.get("Order ID"),
+        "Date": row.get("Date"),
+        "LINE User ID": userId,
+        "Status": row.get("Status"),
+        "Items": row.get("Items"),
+        "Subtotal": Number(row.get("Subtotal")),
+        "Shipping Fee": Number(row.get("Shipping Fee")),
+        "Total": Number(row.get("Total")),
+        "First Name": row.get("First Name"),
+        "Last Name": row.get("Last Name"),
+        "Phone": row.get("Phone"),
+        "Address": row.get("Address"),
+        "Sub-district": row.get("Sub-district"),
+        "District": row.get("District"),
+        "Province": row.get("Province"),
+        "Postal Code": row.get("Postal Code"),
+        "Updated At": row.get("Updated At"),
+        "Transaction Ref": row.get("Transaction Ref") || "",
+        "Paid At": row.get("Paid At") || "",
+        "Variant IDs": row.get("Variant IDs") || "",
+        "Shopify Order ID": row.get("Shopify Order ID") || "",
+        "Size Changed": row.get("Size Changed") || "",
+      };
+    }
+  }
+  return null;
+}
+
+/**
  * Update order size: change Items text, Variant IDs, and mark Size Changed = YES.
  */
 export async function updateOrderSize(

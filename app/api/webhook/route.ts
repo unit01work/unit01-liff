@@ -9,6 +9,7 @@ import {
   getOrder,
   updateShopifyOrderId,
   updateOrderSize,
+  findLatestOrderByUser,
 } from "@/lib/sheets";
 import {
   createShopifyDraftOrder,
@@ -23,6 +24,7 @@ const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}`;
 /* ── keyword maps ── */
 const SHOP_KEYWORDS = ["สั่งซื้อ", "shop", "ซื้อ", "สินค้า", "ร้าน", "เปิดร้าน", "order"];
 const STATUS_KEYWORDS = ["สถานะ", "status", "ออเดอร์", "คำสั่งซื้อ"];
+const CONTACT_KEYWORDS = ["contact", "ติดต่อ", "contact us"];
 const HELP_KEYWORDS = ["help", "ช่วย", "วิธี", "menu", "เมนู"];
 
 function matchKeyword(text: string, keywords: string[]): boolean {
@@ -481,6 +483,19 @@ export async function POST(request: NextRequest) {
 
         if (matchKeyword(text, SHOP_KEYWORDS)) {
           messages = shopReply();
+        } else if (matchKeyword(text, CONTACT_KEYWORDS)) {
+          // Find latest order for this user → show Contact menu
+          const userId = event.source?.userId || "";
+          if (userId) {
+            const latestOrder = await findLatestOrderByUser(userId);
+            if (latestOrder) {
+              messages = await handleContact(latestOrder["Order ID"]);
+            } else {
+              messages = [{ type: "text" as const, text: "No orders found.\nPlease place an order first." }];
+            }
+          } else {
+            messages = [{ type: "text" as const, text: "Unable to identify user." }];
+          }
         } else if (matchKeyword(text, STATUS_KEYWORDS)) {
           messages = statusReply();
         } else if (matchKeyword(text, HELP_KEYWORDS)) {
@@ -499,7 +514,8 @@ export async function POST(request: NextRequest) {
       }
 
       try {
-        await client.replyMessage({ replyToken, messages });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await client.replyMessage({ replyToken, messages: messages as any });
         console.log(`Replied to event: ${event.message.type}`);
       } catch (replyErr) {
         console.error("Reply failed:", replyErr);
