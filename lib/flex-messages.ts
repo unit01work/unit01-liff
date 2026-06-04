@@ -7,7 +7,7 @@ const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID || "201
 /**
  * Contact Us welcome menu — "How can we help?" with 4 options.
  */
-export function buildContactFlex(orderId: string) {
+export function buildContactFlex(orderId: string, locked = false) {
   const cleanId = orderId.replace("#", "");
   const displayId = orderId.startsWith("#") ? orderId : `#${orderId}`;
   const editUri = `${LIFF_URL}?page=edit&order=${cleanId}`;
@@ -45,8 +45,17 @@ export function buildContactFlex(orderId: string) {
             ],
           },
           { type: "separator", color: "#EBE7E4" },
-          // Option 1: Edit shipping address (URI → LIFF)
-          {
+          // Option 1: Edit shipping address
+          ...(locked ? [{
+            type: "box",
+            layout: "horizontal",
+            paddingAll: "lg",
+            contents: [
+              { type: "text", text: "[ 1 ]", size: "xs", color: "#C4BFBB", weight: "bold", flex: 0 },
+              { type: "text", text: "Edit shipping address", size: "xs", color: "#C4BFBB", weight: "bold", margin: "lg", flex: 1 },
+              { type: "text", text: "LOCKED", size: "xxs", color: "#C4BFBB", flex: 0, align: "end" },
+            ],
+          }] : [{
             type: "box",
             layout: "horizontal",
             paddingAll: "lg",
@@ -56,10 +65,19 @@ export function buildContactFlex(orderId: string) {
               { type: "text", text: "Edit shipping address", size: "xs", color: "#1A1A1A", weight: "bold", margin: "lg", flex: 1 },
               { type: "text", text: "›", size: "sm", color: "#C4BFBB", flex: 0, align: "end" },
             ],
-          },
+          }]),
           { type: "separator", color: "#EBE7E4" },
-          // Option 2: Change size (postback)
-          {
+          // Option 2: Change size
+          ...(locked ? [{
+            type: "box",
+            layout: "horizontal",
+            paddingAll: "lg",
+            contents: [
+              { type: "text", text: "[ 2 ]", size: "xs", color: "#C4BFBB", weight: "bold", flex: 0 },
+              { type: "text", text: "Change size", size: "xs", color: "#C4BFBB", weight: "bold", margin: "lg", flex: 1 },
+              { type: "text", text: "LOCKED", size: "xxs", color: "#C4BFBB", flex: 0, align: "end" },
+            ],
+          }] : [{
             type: "box",
             layout: "horizontal",
             paddingAll: "lg",
@@ -69,9 +87,9 @@ export function buildContactFlex(orderId: string) {
               { type: "text", text: "Change size", size: "xs", color: "#1A1A1A", weight: "bold", margin: "lg", flex: 1 },
               { type: "text", text: "›", size: "sm", color: "#C4BFBB", flex: 0, align: "end" },
             ],
-          },
+          }]),
           { type: "separator", color: "#EBE7E4" },
-          // Option 3: Track my order (postback)
+          // Option 3: Track my order (always available)
           {
             type: "box",
             layout: "horizontal",
@@ -84,7 +102,7 @@ export function buildContactFlex(orderId: string) {
             ],
           },
           { type: "separator", color: "#EBE7E4" },
-          // Option 4: Chat with team (postback, gray)
+          // Option 4: Chat with team (always available)
           {
             type: "box",
             layout: "horizontal",

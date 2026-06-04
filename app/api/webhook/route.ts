@@ -178,6 +178,10 @@ async function handleSlipImage(
 /* ── Postback handlers ── */
 
 async function handleContact(orderId: string) {
+  const order = await getOrder(orderId);
+  if (order && order["Size Changed"] === "YES") {
+    return [buildContactFlex(orderId, true)]; // locked mode
+  }
   return [buildContactFlex(orderId)];
 }
 

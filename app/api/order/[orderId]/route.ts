@@ -48,6 +48,12 @@ export async function PUT(
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
+    // Check if order is locked (size already changed)
+    const existingOrder = await getOrder(orderId);
+    if (existingOrder && existingOrder["Size Changed"] === "YES") {
+      return NextResponse.json({ error: "Order is locked. No further changes allowed." }, { status: 403 });
+    }
+
     // Update Google Sheets
     const updated = await updateOrderShipping(orderId, body);
     if (!updated) {
