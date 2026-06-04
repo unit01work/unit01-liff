@@ -3,6 +3,7 @@ import { getOrder, updateOrderShipping } from "@/lib/sheets";
 import { getLineClient } from "@/lib/line";
 import { buildOrderFlex } from "@/lib/flex-order";
 import { getOrderAmount } from "@/lib/order-store";
+import { updateShopifyShippingAddress } from "@/lib/shopify";
 
 const LIFF_URL = "https://liff.line.me/2010192572-jfj8ev6c";
 const BASE_URL = "https://unit01-liff.vercel.app";
@@ -92,6 +93,32 @@ export async function PUT(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await client.pushMessage({ to: order["LINE User ID"], messages: [flexMsg as any] });
         console.log("Resent Flex Message after edit");
+
+        // Send address update confirmation
+        const confirmText = `SHIPPING ADDRESS UPDATED [ Confirmed ]\n#${orderId}\n\n${body.firstName} ${body.lastName}\n${body.address}\n${body.subDistrict} ${body.district}\n${body.province} ${body.postalCode}\nTel: ${body.phone}`;
+        await client.pushMessage({
+          to: order["LINE User ID"],
+          messages: [{ type: "text", text: confirmText }],
+        });
+
+        // Update Shopify order shipping if exists
+        if (order["Shopify Order ID"]) {
+          try {
+            await updateShopifyShippingAddress(order["Shopify Order ID"], {
+              firstName: body.firstName,
+              lastName: body.lastName,
+              address1: body.address,
+              address2: body.subDistrict,
+              city: body.district,
+              province: body.province,
+              zip: body.postalCode,
+              phone: body.phone,
+            });
+            console.log("Shopify shipping updated for order:", orderId);
+          } catch (shopifyErr) {
+            console.error("Shopify shipping update failed:", shopifyErr);
+          }
+        }
       } catch (lineErr) {
         console.error("Resend Flex failed:", lineErr);
       }

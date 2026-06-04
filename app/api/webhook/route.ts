@@ -8,8 +8,15 @@ import {
   updateOrderStatus,
   getOrder,
   updateShopifyOrderId,
+  updateOrderSize,
 } from "@/lib/sheets";
-import { createShopifyDraftOrder } from "@/lib/shopify";
+import {
+  createShopifyDraftOrder,
+  getShopifyOrderStatus,
+  getProductVariants,
+  getProductSizeChart,
+} from "@/lib/shopify";
+import { buildContactFlex, buildChangeSizeFlex } from "@/lib/flex-messages";
 
 const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}`;
 
@@ -166,6 +173,231 @@ async function handleSlipImage(
   }
 }
 
+/* ── Postback handlers ── */
+
+async function handleContact(orderId: string) {
+  return [buildContactFlex(orderId)];
+}
+
+async function handleChangeSize(orderId: string) {
+  const order = await getOrder(orderId);
+  if (!order) return [{ type: "text" as const, text: "Order not found." }];
+
+  // Check if already changed
+  if (order["Size Changed"] === "YES") {
+    return [{
+      type: "text" as const,
+      text: "You've already changed size once.\nPlease chat with our team for further changes.",
+    }];
+  }
+
+  // Parse current item info from Items field: "Product Name (Size) x1"
+  const itemsStr = order["Items"] || "";
+  const itemMatch = itemsStr.match(/^(.+?)\s*\((\w+)\)\s*x(\d+)/);
+  if (!itemMatch) {
+    return [{ type: "text" as const, text: "Unable to determine current size." }];
+  }
+  const productName = itemMatch[1].trim();
+  const currentSize = itemMatch[2];
+
+  // Get variant IDs to find the product
+  const variantIds = order["Variant IDs"] || "";
+  const currentVariantId = variantIds.split(":")[0];
+  if (!currentVariantId) {
+    return [{ type: "text" as const, text: "No variant information found." }];
+  }
+
+  // Find the product ID from Shopify using the variant
+  // We need to search products to find which product has this variant
+  const productsRes = await fetch(
+    `https://${process.env.SHOPIFY_STORE}/admin/api/2026-04/products.json?status=active&fields=id,title,variants`,
+    {
+      headers: { "X-Shopify-Access-Token": process.env.SHOPIFY_ADMIN_API_TOKEN! },
+    }
+  );
+  if (!productsRes.ok) {
+    return [{ type: "text" as const, text: "Unable to check available sizes." }];
+  }
+  const productsData = await productsRes.json();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const product = productsData.products?.find((p: any) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    p.variants?.some((v: any) => String(v.id) === currentVariantId)
+  );
+  if (!product) {
+    return [{ type: "text" as const, text: "Product not found in store." }];
+  }
+
+  // Get available sizes (in stock, not current size)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const availableSizes = product.variants
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .filter((v: any) => v.inventory_quantity > 0 && v.title.toUpperCase() !== currentSize.toUpperCase())
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((v: any) => ({ size: v.title, variantId: String(v.id) }));
+
+  if (availableSizes.length === 0) {
+    return [{
+      type: "text" as const,
+      text: `No other sizes available for ${productName}.\nPlease chat with our team.`,
+    }];
+  }
+
+  // Build messages: 1) Size info text, 2) Size guide image (if exists), 3) Flex to select
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const messages: any[] = [];
+
+  // Text message with current info
+  const availSizeList = availableSizes.map((s: { size: string }) => `[ ${s.size} ]`).join(" ");
+  messages.push({
+    type: "text",
+    text: `CHANGE SIZE\n#${orderId.replace("#", "")}\n${productName}\nCurrent: Size ${currentSize}\nAvailable: ${availSizeList}`,
+  });
+
+  // Size guide from metafield
+  try {
+    const sizeChartUrl = await getProductSizeChart(String(product.id));
+    if (sizeChartUrl) {
+      messages.push({
+        type: "image",
+        originalContentUrl: sizeChartUrl,
+        previewImageUrl: sizeChartUrl,
+      });
+    }
+  } catch (e) {
+    console.log("[webhook] Size chart not available:", e);
+  }
+
+  // Flex message to select size
+  messages.push(buildChangeSizeFlex({
+    orderId,
+    productName,
+    currentSize,
+    availableSizes,
+  }));
+
+  return messages;
+}
+
+async function handleSelectSize(orderId: string, newSize: string, newVariantId: string) {
+  const order = await getOrder(orderId);
+  if (!order) return [{ type: "text" as const, text: "Order not found." }];
+
+  // Check if already changed
+  if (order["Size Changed"] === "YES") {
+    return [{
+      type: "text" as const,
+      text: "You've already changed size once.\nPlease chat with our team for further changes.",
+    }];
+  }
+
+  // Check stock for the new variant
+  const productsRes = await fetch(
+    `https://${process.env.SHOPIFY_STORE}/admin/api/2026-04/products.json?status=active&fields=id,variants`,
+    {
+      headers: { "X-Shopify-Access-Token": process.env.SHOPIFY_ADMIN_API_TOKEN! },
+    }
+  );
+  if (productsRes.ok) {
+    const productsData = await productsRes.json();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let targetVariant: any = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const p of productsData.products || []) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const v = p.variants?.find((v: any) => String(v.id) === newVariantId);
+      if (v) { targetVariant = v; break; }
+    }
+    if (targetVariant && targetVariant.inventory_quantity <= 0) {
+      return [{
+        type: "text" as const,
+        text: `Size ${newSize} is currently out of stock.\nPlease select another size or chat with our team.`,
+      }];
+    }
+  }
+
+  // Parse current size from Items
+  const itemsStr = order["Items"] || "";
+  const itemMatch = itemsStr.match(/^(.+?)\s*\((\w+)\)\s*x(\d+)/);
+  const productName = itemMatch ? itemMatch[1].trim() : "Product";
+  const oldSize = itemMatch ? itemMatch[2] : "?";
+
+  // Update Google Sheets
+  await updateOrderSize(orderId, oldSize, newSize, newVariantId);
+
+  // TODO: Update Shopify order line item if needed (requires order edit API)
+
+  console.log(`[webhook] Size changed: ${orderId} ${oldSize} → ${newSize}`);
+
+  return [{
+    type: "text" as const,
+    text: `SIZE UPDATED [ Confirmed ]\n#${orderId.replace("#", "")}\n\n${productName}\nSize changed: ${oldSize} → ${newSize}`,
+  }];
+}
+
+async function handleTrackOrder(orderId: string) {
+  const order = await getOrder(orderId);
+  if (!order) return [{ type: "text" as const, text: "Order not found." }];
+
+  const displayId = `#${orderId.replace("#", "")}`;
+  const items = order["Items"] || "";
+  const total = Number(order["Total"]) || 0;
+  const status = (order["Status"] || "").toUpperCase();
+
+  // Status 1: Not paid yet
+  if (status === "PENDING") {
+    return [{
+      type: "text" as const,
+      text: `ORDER STATUS [ Awaiting Payment ]\n${displayId}\n\n${items}\nTotal: ฿${total.toLocaleString()}\n\nPlease complete payment and\nsend transfer slip to this chat.`,
+    }];
+  }
+
+  // Check Shopify for fulfillment info
+  const shopifyOrderId = order["Shopify Order ID"];
+  if (shopifyOrderId) {
+    try {
+      const shopifyOrder = await getShopifyOrderStatus(shopifyOrderId);
+      if (shopifyOrder) {
+        const fulfillment = shopifyOrder.fulfillments?.[0];
+
+        // Status 3: Shipped with tracking
+        if (fulfillment && fulfillment.tracking_number) {
+          const carrier = fulfillment.tracking_company || "Carrier";
+          const tracking = fulfillment.tracking_number;
+          const trackUrl = fulfillment.tracking_url || "";
+
+          let text = `ORDER STATUS [ Shipped ]\n${displayId}\n\n${items}\n\nCarrier: ${carrier}\nTracking: ${tracking}`;
+          if (trackUrl) text += `\n\nTrack here:\n${trackUrl}`;
+          return [{ type: "text" as const, text }];
+        }
+
+        // Status 4: Shipped without tracking
+        if (shopifyOrder.fulfillment_status === "fulfilled") {
+          return [{
+            type: "text" as const,
+            text: `ORDER STATUS [ Shipped ]\n${displayId}\n\n${items}\n\nYour order has been shipped.\nTracking number will be updated soon.`,
+          }];
+        }
+      }
+    } catch (e) {
+      console.error("[webhook] Track order Shopify error:", e);
+    }
+  }
+
+  // Status 2: Paid, not shipped yet
+  return [{
+    type: "text" as const,
+    text: `ORDER STATUS [ Processing ]\n${displayId}\n\n${items}\nTotal: ฿${total.toLocaleString()}\n\nYour order is being prepared.\nEstimated dispatch: 1-3 business days.`,
+  }];
+}
+
+function handleChatTeam() {
+  return [{
+    type: "text" as const,
+    text: "Please type your message.\nOur team will reply shortly.",
+  }];
+}
+
 /* ── webhook handler ── */
 export async function POST(request: NextRequest) {
   try {
@@ -198,10 +430,51 @@ export async function POST(request: NextRequest) {
     const client = getLineClient();
 
     for (const event of events) {
-      if (event.type !== "message" || !event.replyToken) continue;
-
+      if (!event.replyToken) continue;
       const replyToken: string = event.replyToken;
       let messages;
+
+      // ── Postback events ──
+      if (event.type === "postback") {
+        const params = new URLSearchParams(event.postback.data);
+        const action = params.get("action");
+        const postbackOrderId = params.get("orderId") || "";
+
+        switch (action) {
+          case "contact":
+            messages = await handleContact(postbackOrderId);
+            break;
+          case "change_size":
+            messages = await handleChangeSize(postbackOrderId);
+            break;
+          case "track":
+            messages = await handleTrackOrder(postbackOrderId);
+            break;
+          case "chat_team":
+            messages = handleChatTeam();
+            break;
+          case "select_size": {
+            const size = params.get("size") || "";
+            const variantId = params.get("variantId") || "";
+            messages = await handleSelectSize(postbackOrderId, size, variantId);
+            break;
+          }
+          default:
+            messages = [{ type: "text" as const, text: "Unknown action." }];
+        }
+
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await client.replyMessage({ replyToken, messages: messages as any });
+          console.log(`Replied to postback: ${action}`);
+        } catch (replyErr) {
+          console.error("Postback reply failed:", replyErr);
+        }
+        continue;
+      }
+
+      // ── Message events ──
+      if (event.type !== "message") continue;
 
       if (event.message.type === "text") {
         const text: string = event.message.text;

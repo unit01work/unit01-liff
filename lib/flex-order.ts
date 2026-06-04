@@ -74,9 +74,8 @@ export function buildOrderFlex({
     );
   });
 
-  // Encode Thai text for URI
-  const contactUri = `https://line.me/R/oaMessage/@086nkudl/?text=${encodeURIComponent("สอบถามเรื่องออเดอร์")}`;
-  const editUri = `${liffUrl}?page=edit&order=${orderId.replace("#", "")}`;
+  const cleanOrderId = orderId.replace("#", "");
+  const editUri = `${liffUrl}?page=edit&order=${cleanOrderId}`;
 
   return {
     type: "flex",
@@ -221,7 +220,12 @@ export function buildOrderFlex({
             contents: [
               {
                 type: "button",
-                action: { type: "uri", label: "Contact us", uri: contactUri },
+                action: {
+                  type: "postback",
+                  label: "Contact us",
+                  data: `action=contact&orderId=${cleanOrderId}`,
+                  displayText: "Contact us",
+                },
                 style: "link",
                 color: "#888888",
                 height: "sm",

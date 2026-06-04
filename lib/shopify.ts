@@ -209,3 +209,109 @@ export async function createShopifyDraftOrder(
 
   return data.draft_order;
 }
+
+/**
+ * Shopify API helper — make authenticated requests.
+ */
+async function shopifyFetch(path: string, options?: RequestInit) {
+  const res = await fetch(
+    `https://${process.env.SHOPIFY_STORE}/admin/api/2026-04${path}`,
+    {
+      ...options,
+      headers: {
+        "X-Shopify-Access-Token": process.env.SHOPIFY_ADMIN_API_TOKEN!,
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    }
+  );
+  return res;
+}
+
+/**
+ * Get Shopify order details (fulfillment status, tracking info).
+ */
+export async function getShopifyOrderStatus(shopifyOrderId: string) {
+  const res = await shopifyFetch(
+    `/orders/${shopifyOrderId}.json?fields=id,name,fulfillment_status,fulfillments`
+  );
+  if (!res.ok) {
+    console.error("[shopify] getOrderStatus error:", res.status);
+    return null;
+  }
+  const data = await res.json();
+  return data.order;
+}
+
+/**
+ * Update shipping address on a Shopify order.
+ */
+export async function updateShopifyShippingAddress(
+  shopifyOrderId: string,
+  address: {
+    firstName: string;
+    lastName: string;
+    address1: string;
+    address2: string;
+    city: string;
+    province: string;
+    zip: string;
+    phone: string;
+  }
+) {
+  const res = await shopifyFetch(`/orders/${shopifyOrderId}.json`, {
+    method: "PUT",
+    body: JSON.stringify({
+      order: {
+        id: Number(shopifyOrderId),
+        shipping_address: {
+          first_name: address.firstName,
+          last_name: address.lastName,
+          address1: address.address1,
+          address2: address.address2,
+          city: address.city,
+          province: toShopifyProvince(address.province),
+          zip: address.zip,
+          country: "TH",
+          phone: address.phone,
+        },
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("[shopify] updateShipping error:", res.status, errText);
+    return false;
+  }
+  console.log("[shopify] Shipping address updated for order:", shopifyOrderId);
+  return true;
+}
+
+/**
+ * Get product variants with stock from Shopify.
+ */
+export async function getProductVariants(productId: string) {
+  const res = await shopifyFetch(
+    `/products/${productId}.json?fields=id,title,variants`
+  );
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.product;
+}
+
+/**
+ * Get product size chart metafield.
+ */
+export async function getProductSizeChart(productId: string): Promise<string | null> {
+  const res = await shopifyFetch(
+    `/products/${productId}/metafields.json`
+  );
+  if (!res.ok) return null;
+  const data = await res.json();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sizeChart = data.metafields?.find((m: any) =>
+    m.key === "sizechart" || m.key === "size_chart" || m.key === "SIZECHART"
+  );
+  return sizeChart?.value || null;
+}
