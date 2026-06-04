@@ -91,5 +91,30 @@ export async function createShopifyDraftOrder(
   }
 
   console.log("[shopify] Draft Order created:", data.draft_order?.id, data.draft_order?.name);
+
+  // Auto-complete: convert Draft Order → real paid Order
+  const draftId = data.draft_order.id;
+  const completeRes = await fetch(
+    `https://${process.env.SHOPIFY_STORE}/admin/api/2026-04/draft_orders/${draftId}/complete.json?payment_pending=false`,
+    {
+      method: "PUT",
+      headers: {
+        "X-Shopify-Access-Token": process.env.SHOPIFY_ADMIN_API_TOKEN!,
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  if (completeRes.ok) {
+    const completeData = await completeRes.json();
+    const orderId = completeData.draft_order?.order_id;
+    console.log("[shopify] Draft Order completed → Order ID:", orderId);
+    // Return with the real order_id attached
+    data.draft_order.order_id = orderId;
+  } else {
+    const errText = await completeRes.text();
+    console.error("[shopify] Complete Draft Order failed:", completeRes.status, errText);
+  }
+
   return data.draft_order;
 }
