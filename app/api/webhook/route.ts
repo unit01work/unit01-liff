@@ -259,7 +259,7 @@ async function handleChangeSize(orderId: string) {
   // Size guide from metafield
   try {
     const sizeChartUrl = await getProductSizeChart(String(product.id));
-    if (sizeChartUrl) {
+    if (sizeChartUrl && sizeChartUrl.startsWith("https://")) {
       messages.push({
         type: "image",
         originalContentUrl: sizeChartUrl,
