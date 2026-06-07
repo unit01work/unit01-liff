@@ -109,6 +109,97 @@ function toShopifyProvince(thai: string): string {
 }
 
 /**
+ * Thai province → ISO 3166-2:TH subdivision code.
+ * Shopify's GraphQL MailingAddressInput requires `provinceCode`
+ * (the `province` name field does NOT exist in the input type).
+ * Keyed by both Thai name and English name for flexibility.
+ */
+const THAI_PROVINCE_CODE_MAP: Record<string, string> = {
+  "กรุงเทพมหานคร": "TH-10", "กรุงเทพ": "TH-10", "กทม": "TH-10", "กทม.": "TH-10", "Bangkok": "TH-10",
+  "สมุทรปราการ": "TH-11", "Samut Prakan": "TH-11",
+  "นนทบุรี": "TH-12", "Nonthaburi": "TH-12",
+  "ปทุมธานี": "TH-13", "Pathum Thani": "TH-13",
+  "พระนครศรีอยุธยา": "TH-14", "Phra Nakhon Si Ayutthaya": "TH-14",
+  "อ่างทอง": "TH-15", "Ang Thong": "TH-15",
+  "ลพบุรี": "TH-16", "Lopburi": "TH-16",
+  "สิงห์บุรี": "TH-17", "Sing Buri": "TH-17",
+  "ชัยนาท": "TH-18", "Chai Nat": "TH-18",
+  "สระบุรี": "TH-19", "Saraburi": "TH-19",
+  "ชลบุรี": "TH-20", "Chon Buri": "TH-20",
+  "ระยอง": "TH-21", "Rayong": "TH-21",
+  "จันทบุรี": "TH-22", "Chanthaburi": "TH-22",
+  "ตราด": "TH-23", "Trat": "TH-23",
+  "ฉะเชิงเทรา": "TH-24", "Chachoengsao": "TH-24",
+  "ปราจีนบุรี": "TH-25", "Prachin Buri": "TH-25",
+  "นครนายก": "TH-26", "Nakhon Nayok": "TH-26",
+  "สระแก้ว": "TH-27", "Sa Kaeo": "TH-27",
+  "นครราชสีมา": "TH-30", "Nakhon Ratchasima": "TH-30",
+  "บุรีรัมย์": "TH-31", "Buri Ram": "TH-31",
+  "สุรินทร์": "TH-32", "Surin": "TH-32",
+  "ศรีสะเกษ": "TH-33", "Si Sa Ket": "TH-33",
+  "อุบลราชธานี": "TH-34", "Ubon Ratchathani": "TH-34",
+  "ยโสธร": "TH-35", "Yasothon": "TH-35",
+  "ชัยภูมิ": "TH-36", "Chaiyaphum": "TH-36",
+  "อำนาจเจริญ": "TH-37", "Amnat Charoen": "TH-37",
+  "บึงกาฬ": "TH-38", "Bueng Kan": "TH-38",
+  "หนองบัวลำภู": "TH-39", "Nong Bua Lam Phu": "TH-39",
+  "ขอนแก่น": "TH-40", "Khon Kaen": "TH-40",
+  "อุดรธานี": "TH-41", "Udon Thani": "TH-41",
+  "เลย": "TH-42", "Loei": "TH-42",
+  "หนองคาย": "TH-43", "Nong Khai": "TH-43",
+  "มหาสารคาม": "TH-44", "Maha Sarakham": "TH-44",
+  "ร้อยเอ็ด": "TH-45", "Roi Et": "TH-45",
+  "กาฬสินธุ์": "TH-46", "Kalasin": "TH-46",
+  "สกลนคร": "TH-47", "Sakon Nakhon": "TH-47",
+  "นครพนม": "TH-48", "Nakhon Phanom": "TH-48",
+  "มุกดาหาร": "TH-49", "Mukdahan": "TH-49",
+  "เชียงใหม่": "TH-50", "Chiang Mai": "TH-50",
+  "ลำพูน": "TH-51", "Lamphun": "TH-51",
+  "ลำปาง": "TH-52", "Lampang": "TH-52",
+  "อุตรดิตถ์": "TH-53", "Uttaradit": "TH-53",
+  "แพร่": "TH-54", "Phrae": "TH-54",
+  "น่าน": "TH-55", "Nan": "TH-55",
+  "พะเยา": "TH-56", "Phayao": "TH-56",
+  "เชียงราย": "TH-57", "Chiang Rai": "TH-57",
+  "แม่ฮ่องสอน": "TH-58", "Mae Hong Son": "TH-58",
+  "นครสวรรค์": "TH-60", "Nakhon Sawan": "TH-60",
+  "อุทัยธานี": "TH-61", "Uthai Thani": "TH-61",
+  "กำแพงเพชร": "TH-62", "Kamphaeng Phet": "TH-62",
+  "ตาก": "TH-63", "Tak": "TH-63",
+  "สุโขทัย": "TH-64", "Sukhothai": "TH-64",
+  "พิษณุโลก": "TH-65", "Phitsanulok": "TH-65",
+  "พิจิตร": "TH-66", "Phichit": "TH-66",
+  "เพชรบูรณ์": "TH-67", "Phetchabun": "TH-67",
+  "ราชบุรี": "TH-70", "Ratchaburi": "TH-70",
+  "กาญจนบุรี": "TH-71", "Kanchanaburi": "TH-71",
+  "สุพรรณบุรี": "TH-72", "Suphan Buri": "TH-72",
+  "นครปฐม": "TH-73", "Nakhon Pathom": "TH-73",
+  "สมุทรสาคร": "TH-74", "Samut Sakhon": "TH-74",
+  "สมุทรสงคราม": "TH-75", "Samut Songkhram": "TH-75",
+  "เพชรบุรี": "TH-76", "Phetchaburi": "TH-76",
+  "ประจวบคีรีขันธ์": "TH-77", "Prachuap Khiri Khan": "TH-77",
+  "นครศรีธรรมราช": "TH-80", "Nakhon Si Thammarat": "TH-80",
+  "กระบี่": "TH-81", "Krabi": "TH-81",
+  "พังงา": "TH-82", "Phangnga": "TH-82",
+  "ภูเก็ต": "TH-83", "Phuket": "TH-83",
+  "สุราษฎร์ธานี": "TH-84", "Surat Thani": "TH-84",
+  "ระนอง": "TH-85", "Ranong": "TH-85",
+  "ชุมพร": "TH-86", "Chumphon": "TH-86",
+  "สงขลา": "TH-90", "Songkhla": "TH-90",
+  "สตูล": "TH-91", "Satun": "TH-91",
+  "ตรัง": "TH-92", "Trang": "TH-92",
+  "พัทลุง": "TH-93", "Phatthalung": "TH-93",
+  "ปัตตานี": "TH-94", "Pattani": "TH-94",
+  "ยะลา": "TH-95", "Yala": "TH-95",
+  "นราธิวาส": "TH-96", "Narathiwat": "TH-96",
+};
+
+function toShopifyProvinceCode(province: string): string | null {
+  const trimmed = province.trim();
+  return THAI_PROVINCE_CODE_MAP[trimmed] || THAI_PROVINCE_CODE_MAP[toShopifyProvince(trimmed)] || null;
+}
+
+/**
  * Parse variant IDs string from Google Sheets.
  * Format: "shopifyVariantId:qty,shopifyVariantId:qty"
  * Example: "49705473081581:1,49982772248813:2"
@@ -278,22 +369,28 @@ export async function updateShopifyShippingAddress(
     }
   `;
 
-  const variables = {
-    input: {
-      id: orderGid,
-      shippingAddress: {
-        firstName: address.firstName,
-        lastName: address.lastName,
-        address1: address.address1,
-        address2: address.address2,
-        city: address.city,
-        province: toShopifyProvince(address.province),
-        zip: address.zip,
-        countryCode: "TH",
-        phone: address.phone,
-      },
-    },
+  // MailingAddressInput uses `provinceCode` (ISO 3166-2), NOT `province`.
+  // Only include it when we can resolve a valid code, otherwise Shopify
+  // keeps the existing province / derives it from city + zip.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const shippingAddress: Record<string, any> = {
+    firstName: address.firstName,
+    lastName: address.lastName,
+    address1: address.address1,
+    address2: address.address2,
+    city: address.city,
+    zip: address.zip,
+    countryCode: "TH",
+    phone: address.phone,
   };
+  const provinceCode = toShopifyProvinceCode(address.province);
+  if (provinceCode) {
+    shippingAddress.provinceCode = provinceCode;
+  } else {
+    console.warn("[shopify] No provinceCode for:", address.province, "— skipping province update");
+  }
+
+  const variables = { input: { id: orderGid, shippingAddress } };
 
   const result = await shopifyGraphQL(mutation, variables);
   if (!result) {
@@ -336,7 +433,12 @@ async function shopifyGraphQL(query: string, variables?: Record<string, unknown>
     console.error("[shopify-gql] error:", res.status, errText);
     return null;
   }
-  return await res.json();
+  const json = await res.json();
+  // GraphQL returns HTTP 200 even for query-level errors (bad fields, etc.)
+  if (json?.errors) {
+    console.error("[shopify-gql] GraphQL errors:", JSON.stringify(json.errors));
+  }
+  return json;
 }
 
 /**
