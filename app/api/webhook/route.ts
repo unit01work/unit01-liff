@@ -10,14 +10,23 @@ import {
   updateShopifyOrderId,
   updateOrderSize,
   findLatestOrderByUser,
+  findActiveOrders,
+  findExpiredOrders,
 } from "@/lib/sheets";
 import {
   createShopifyDraftOrder,
   getShopifyOrderStatus,
   getProductVariants,
   getProductSizeChart,
+  isOrderUnfulfilled,
+  updateShopifyOrderVariant,
 } from "@/lib/shopify";
-import { buildContactFlex, buildChangeSizeFlex } from "@/lib/flex-messages";
+import {
+  buildContactFlex,
+  buildChangeSizeFlex,
+  buildContactMenuNoOrder,
+  buildSelectOrderFlex,
+} from "@/lib/flex-messages";
 
 const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}`;
 
@@ -157,8 +166,10 @@ async function handleSlipImage(
       const freshOrder = await getOrder(orderId);
       if (freshOrder && freshOrder["Variant IDs"]) {
         const shopifyOrder = await createShopifyDraftOrder(freshOrder);
-        await updateShopifyOrderId(orderId, String(shopifyOrder.id));
-        console.log("[slip] Shopify Draft Order created:", shopifyOrder.id);
+        // Use the real order_id (from completed draft), fallback to draft id
+        const realOrderId = shopifyOrder.order_id || shopifyOrder.id;
+        await updateShopifyOrderId(orderId, String(realOrderId));
+        console.log("[slip] Shopify Order created:", realOrderId);
       } else {
         console.log("[slip] No variant IDs, skipping Shopify Draft Order");
       }
@@ -179,10 +190,9 @@ async function handleSlipImage(
 
 async function handleContact(orderId: string) {
   const order = await getOrder(orderId);
-  if (order && order["Size Changed"] === "YES") {
-    return [buildContactFlex(orderId, true)]; // locked mode
-  }
-  return [buildContactFlex(orderId)];
+  const addressLocked = order?.["Address Changed"] === "YES";
+  const sizeLocked = order?.["Size Changed"] === "YES";
+  return [buildContactFlex(orderId, { addressLocked, sizeLocked })];
 }
 
 async function handleChangeSize(orderId: string) {
@@ -191,9 +201,10 @@ async function handleChangeSize(orderId: string) {
 
   // Check if already changed
   if (order["Size Changed"] === "YES") {
+    const displayId = `#${orderId.replace("#", "")}`;
     return [{
       type: "text" as const,
-      text: "You've already changed size once.\nPlease chat with our team for further changes.",
+      text: `Size for order ${displayId} has already been changed.\nPlease contact our team for further changes.`,
     }];
   }
 
@@ -291,9 +302,10 @@ async function handleSelectSize(orderId: string, newSize: string, newVariantId: 
 
   // Check if already changed
   if (order["Size Changed"] === "YES") {
+    const displayId = `#${orderId.replace("#", "")}`;
     return [{
       type: "text" as const,
-      text: "You've already changed size once.\nPlease chat with our team for further changes.",
+      text: `Size for order ${displayId} has already been changed.\nPlease contact our team for further changes.`,
     }];
   }
 
@@ -328,10 +340,22 @@ async function handleSelectSize(orderId: string, newSize: string, newVariantId: 
   const productName = itemMatch ? itemMatch[1].trim() : "Product";
   const oldSize = itemMatch ? itemMatch[2] : "?";
 
+  // Get old variant ID before updating sheets
+  const oldVariantId = (order["Variant IDs"] || "").split(":")[0];
+
   // Update Google Sheets
   await updateOrderSize(orderId, oldSize, newSize, newVariantId);
 
-  // TODO: Update Shopify order line item if needed (requires order edit API)
+  // Update Shopify Order line item variant
+  if (order["Shopify Order ID"] && oldVariantId) {
+    try {
+      await updateShopifyOrderVariant(order["Shopify Order ID"], oldVariantId, newVariantId);
+      console.log("[webhook] Shopify order variant updated:", orderId);
+    } catch (shopifyErr) {
+      console.error("[webhook] Shopify variant update failed:", shopifyErr);
+      // Don't block — Sheets is already updated
+    }
+  }
 
   console.log(`[webhook] Size changed: ${orderId} ${oldSize} → ${newSize}`);
 
@@ -404,6 +428,121 @@ function handleChatTeam() {
   }];
 }
 
+/**
+ * Get unfulfilled (not yet shipped) PAID orders for a user.
+ * Checks Shopify fulfillment status for each order.
+ * Optional filter: "address" or "size" to exclude already-changed orders.
+ */
+async function getUnfulfilledOrders(userId: string, filter?: "address" | "size") {
+  const paidOrders = await findActiveOrders(userId, filter);
+  if (paidOrders.length === 0) return [];
+
+  // Filter by Shopify fulfillment status
+  const results = [];
+  for (const order of paidOrders) {
+    const shopifyId = order["Shopify Order ID"];
+    if (shopifyId) {
+      const unfulfilled = await isOrderUnfulfilled(shopifyId);
+      if (unfulfilled) results.push(order);
+    } else {
+      // No Shopify order = hasn't been sent to Shopify yet, include it
+      results.push(order);
+    }
+  }
+  return results;
+}
+
+/**
+ * Get ALL PAID orders for a user (including fulfilled).
+ * Used for Track my order — no lock, no fulfillment filter.
+ */
+async function getAllPaidOrders(userId: string) {
+  return await findActiveOrders(userId);
+}
+
+/**
+ * Map menu action (e.g. "edit_address_menu") to the nextAction key for select_order
+ */
+function menuActionToNextAction(action: string): string {
+  switch (action) {
+    case "edit_address_menu": return "edit_address";
+    case "change_size_menu": return "change_size";
+    case "track_menu": return "track";
+    default: return action;
+  }
+}
+
+/**
+ * Handle menu postback actions that don't have an orderId.
+ * Checks how many active orders the user has and routes accordingly.
+ * Each action has its own filter:
+ *   edit_address_menu → PAID + unfulfilled + Address Changed=NO
+ *   change_size_menu  → PAID + unfulfilled + Size Changed=NO
+ *   track_menu        → ALL PAID (no lock, no fulfillment filter)
+ */
+async function handleMenuAction(action: string, userId: string) {
+  let orders;
+
+  if (action === "track_menu") {
+    // Track shows ALL paid orders including fulfilled
+    orders = await getAllPaidOrders(userId);
+  } else {
+    // Edit address / Change size → filter by lock + unfulfilled
+    const filter = action === "edit_address_menu" ? "address" : "size";
+    orders = await getUnfulfilledOrders(userId, filter);
+  }
+
+  if (orders.length === 0) {
+    return [{ type: "text" as const, text: "No paid orders found." }];
+  }
+
+  // Always show SELECT ORDER — even if only 1 order
+  const nextAction = menuActionToNextAction(action);
+  const orderList = orders.map((o) => ({
+    orderId: o["Order ID"],
+    items: o["Items"],
+    total: o["Total"],
+  }));
+  return [buildSelectOrderFlex(orderList, nextAction)];
+}
+
+/**
+ * Handle select_order postback — user picked an order from the picker.
+ */
+async function handleSelectOrder(orderId: string, nextAction: string) {
+  switch (nextAction) {
+    case "edit_address": {
+      // Check lock
+      const order = await getOrder(orderId);
+      const displayId = `#${orderId.replace("#", "")}`;
+      if (order?.["Address Changed"] === "YES") {
+        return [{
+          type: "text" as const,
+          text: `Shipping address for order ${displayId} has already been edited.\nPlease contact our team for further changes.`,
+        }];
+      }
+      const cleanId = orderId.replace("#", "");
+      const editUri = `${LIFF_URL}?page=edit&order=${cleanId}`;
+      return [
+        {
+          type: "text" as const,
+          text: `${displayId}\n\nThis is your only chance to edit shipping address.\nPlease make sure all details are correct.`,
+        },
+        {
+          type: "text" as const,
+          text: editUri,
+        },
+      ];
+    }
+    case "change_size":
+      return await handleChangeSize(orderId);
+    case "track":
+      return await handleTrackOrder(orderId);
+    default:
+      return [{ type: "text" as const, text: "Unknown action." }];
+  }
+}
+
 /* ── webhook handler ── */
 export async function POST(request: NextRequest) {
   try {
@@ -423,6 +562,25 @@ export async function POST(request: NextRequest) {
 
     const body = JSON.parse(rawBody);
     const events = body.events || [];
+
+    // Piggyback: check and expire old PENDING orders on every webhook call
+    try {
+      const expired = await findExpiredOrders(5);
+      for (const eo of expired) {
+        await updateOrderStatus(eo["Order ID"], "EXPIRED", "");
+        console.log(`[webhook] Auto-expired: ${eo["Order ID"]}`);
+        if (eo["LINE User ID"] && process.env.LINE_CHANNEL_ACCESS_TOKEN) {
+          const cl = getLineClient();
+          const did = eo["Order ID"].startsWith("#") ? eo["Order ID"] : `#${eo["Order ID"]}`;
+          await cl.pushMessage({
+            to: eo["LINE User ID"],
+            messages: [{ type: "text", text: `Your order ${did} has been cancelled\ndue to payment timeout.\n\nPlease place a new order if you'd like to purchase.` }],
+          }).catch(() => {});
+        }
+      }
+    } catch (expErr) {
+      console.error("[webhook] Expiry check failed:", expErr);
+    }
 
     // No token = can't reply
     if (
@@ -465,6 +623,19 @@ export async function POST(request: NextRequest) {
             messages = await handleSelectSize(postbackOrderId, size, variantId);
             break;
           }
+          // Rich Menu menu actions (no orderId)
+          case "edit_address_menu":
+          case "change_size_menu":
+          case "track_menu": {
+            const menuUserId = event.source?.userId || "";
+            messages = await handleMenuAction(action!, menuUserId);
+            break;
+          }
+          case "select_order": {
+            const nextAction = params.get("nextAction") || "";
+            messages = await handleSelectOrder(postbackOrderId, nextAction);
+            break;
+          }
           default:
             messages = [{ type: "text" as const, text: "Unknown action." }];
         }
@@ -488,18 +659,8 @@ export async function POST(request: NextRequest) {
         if (matchKeyword(text, SHOP_KEYWORDS)) {
           messages = shopReply();
         } else if (matchKeyword(text, CONTACT_KEYWORDS)) {
-          // Find latest order for this user → show Contact menu
-          const userId = event.source?.userId || "";
-          if (userId) {
-            const latestOrder = await findLatestOrderByUser(userId);
-            if (latestOrder) {
-              messages = await handleContact(latestOrder["Order ID"]);
-            } else {
-              messages = [{ type: "text" as const, text: "No orders found.\nPlease place an order first." }];
-            }
-          } else {
-            messages = [{ type: "text" as const, text: "Unable to identify user." }];
-          }
+          // From Rich Menu — send Contact menu without order ID
+          messages = [buildContactMenuNoOrder()];
         } else if (matchKeyword(text, STATUS_KEYWORDS)) {
           messages = statusReply();
         } else if (matchKeyword(text, HELP_KEYWORDS)) {

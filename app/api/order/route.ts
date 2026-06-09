@@ -113,6 +113,15 @@ export async function POST(request: NextRequest) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await client.pushMessage({ to: body.lineUserId, messages: [flexMsg as any] });
         console.log("Flex Message sent");
+
+        // Send payment timeout warning
+        await client.pushMessage({
+          to: body.lineUserId,
+          messages: [{
+            type: "text",
+            text: "Please complete payment within 5 minutes.\nYour order will be automatically cancelled if no payment is received.",
+          }],
+        });
       } catch (flexErr: unknown) {
         if (flexErr && typeof flexErr === "object" && "body" in flexErr) {
           console.error("LINE API error:", String((flexErr as { body: unknown }).body));

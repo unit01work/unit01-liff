@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getOrder, updateOrderShipping } from "@/lib/sheets";
+import { getOrder, updateOrderShipping, updateOrderFull } from "@/lib/sheets";
 import { getLineClient } from "@/lib/line";
 import { buildOrderFlex } from "@/lib/flex-order";
-import { getOrderAmount } from "@/lib/order-store";
+import { getOrderAmount, saveOrder } from "@/lib/order-store";
 import { updateShopifyShippingAddress } from "@/lib/shopify";
 
 const LIFF_URL = "https://liff.line.me/2010192572-jfj8ev6c";
@@ -26,32 +26,112 @@ export async function GET(
   }
 }
 
-// PUT /api/order/[orderId] — update shipping info + resend Flex Message
+// PUT /api/order/[orderId] — update order (reorder or edit shipping)
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ orderId: string }> }
 ) {
   try {
     const { orderId } = await params;
-    const body: {
-      firstName: string;
-      lastName: string;
-      phone: string;
-      address: string;
-      subDistrict: string;
-      district: string;
-      province: string;
-      postalCode: string;
-    } = await request.json();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body: any = await request.json();
 
+    const existingOrder = await getOrder(orderId);
+    if (!existingOrder) {
+      return NextResponse.json({ error: "Order not found" }, { status: 404 });
+    }
+
+    const isPaid = (existingOrder["Status"] || "").toUpperCase() === "PAID";
+    const isPending = (existingOrder["Status"] || "").toUpperCase() === "PENDING";
+
+    // ── REORDER MODE (PENDING + has cart data) ──
+    if (isPending && body.cart && Array.isArray(body.cart)) {
+      const { cart, shipping } = body;
+      if (!cart.length || !shipping?.firstName) {
+        return NextResponse.json({ error: "Invalid reorder data" }, { status: 400 });
+      }
+
+      const sub = cart.reduce((s: number, c: { price: number; qty: number }) => s + c.price * c.qty, 0);
+      const ship = parseInt(process.env.SHIPPING_FEE || "50", 10);
+      const total = sub + ship;
+
+      const itemsStr = cart
+        .map((c: { name: string; size: string; qty: number }) => `${c.name} (${c.size}) x${c.qty}`)
+        .join(", ");
+      const variantIds = cart
+        .filter((c: { shopifyVariantId?: string }) => c.shopifyVariantId)
+        .map((c: { shopifyVariantId: string; qty: number }) => `${c.shopifyVariantId}:${c.qty}`)
+        .join(",");
+
+      const updated = await updateOrderFull(orderId, {
+        items: itemsStr,
+        subtotal: sub,
+        shippingFee: ship,
+        total,
+        firstName: shipping.firstName,
+        lastName: shipping.lastName,
+        phone: shipping.phone,
+        address: shipping.address,
+        subDistrict: shipping.subDistrict,
+        district: shipping.district,
+        province: shipping.province,
+        postalCode: shipping.postalCode,
+        variantIds,
+      });
+
+      if (!updated) {
+        return NextResponse.json({ error: "Failed to update order" }, { status: 500 });
+      }
+
+      // Save updated amount for QR
+      const orderIdClean = orderId.replace("#", "");
+      saveOrder(orderIdClean, total);
+
+      // Send new Flex Message
+      if (existingOrder["LINE User ID"] && process.env.LINE_CHANNEL_ACCESS_TOKEN) {
+        try {
+          const client = getLineClient();
+          const host = request.headers.get("host") || "unit01-liff.vercel.app";
+          const protocol = host.includes("localhost") ? "http" : "https";
+          const qrUrl = `${protocol}://${host}/api/qr/${orderIdClean}?amount=${total}`;
+
+          const flexMsg = buildOrderFlex({
+            orderId: existingOrder["Order ID"],
+            cart,
+            shipping,
+            total,
+            ship,
+            qrUrl,
+            liffUrl: LIFF_URL,
+          });
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await client.pushMessage({ to: existingOrder["LINE User ID"], messages: [flexMsg as any] });
+
+          // Send payment warning
+          await client.pushMessage({
+            to: existingOrder["LINE User ID"],
+            messages: [{
+              type: "text",
+              text: "Please complete payment within 5 minutes.\nYour order will be automatically cancelled if no payment is received.",
+            }],
+          });
+        } catch (lineErr) {
+          console.error("Reorder Flex failed:", lineErr);
+        }
+      }
+
+      return NextResponse.json({ success: true, orderId: existingOrder["Order ID"], total });
+    }
+
+    // ── EDIT SHIPPING MODE (PAID order) ──
     if (!body.firstName || !body.lastName || !body.phone || !body.address || !body.postalCode) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // Check if order is locked (size already changed)
-    const existingOrder = await getOrder(orderId);
-    if (existingOrder && existingOrder["Size Changed"] === "YES") {
-      return NextResponse.json({ error: "Order is locked. No further changes allowed." }, { status: 403 });
+    // Check address lock for PAID orders
+    if (isPaid && existingOrder["Address Changed"] === "YES") {
+      return NextResponse.json({ error: "Shipping address has already been edited once. No further changes allowed." }, { status: 403 });
     }
 
     // Update Google Sheets
@@ -60,55 +140,44 @@ export async function PUT(
       return NextResponse.json({ error: "Order not found" }, { status: 404 });
     }
 
-    // Fetch updated order to resend Flex Message
+    // Send confirmation
     const order = await getOrder(orderId);
     if (order && order["LINE User ID"] && process.env.LINE_CHANNEL_ACCESS_TOKEN) {
       try {
         const client = getLineClient();
-        const total = order["Total"];
-        const ship = order["Shipping Fee"];
 
-        // Rebuild cart-like structure from stored items string
-        const cartSimple = [{ name: order["Items"], size: "", price: total - ship, qty: 1 }];
+        if (!isPaid) {
+          // PENDING: Resend Flex + QR
+          const total = order["Total"];
+          const ship = order["Shipping Fee"];
+          const cartSimple = [{ name: order["Items"], size: "", price: total - ship, qty: 1 }];
+          const storedAmount = getOrderAmount(orderId) ?? total;
+          const qrUrl = `${BASE_URL}/api/qr/${orderId}?amount=${storedAmount}`;
 
-        // Try to get QR amount from memory, fallback to stored total
-        const storedAmount = getOrderAmount(orderId) ?? total;
-        const qrUrl = `${BASE_URL}/api/qr/${orderId}?amount=${storedAmount}`;
+          const flexMsg = buildOrderFlex({
+            orderId: order["Order ID"],
+            cart: cartSimple,
+            shipping: body,
+            total,
+            ship,
+            qrUrl,
+            liffUrl: LIFF_URL,
+          });
 
-        const shippingInfo = {
-          firstName: body.firstName,
-          lastName: body.lastName,
-          phone: body.phone,
-          address: body.address,
-          subDistrict: body.subDistrict,
-          district: body.district,
-          province: body.province,
-          postalCode: body.postalCode,
-        };
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await client.pushMessage({ to: order["LINE User ID"], messages: [flexMsg as any] });
+        }
 
-        const flexMsg = buildOrderFlex({
-          orderId: order["Order ID"],
-          cart: cartSimple,
-          shipping: shippingInfo,
-          total,
-          ship,
-          qrUrl,
-          liffUrl: LIFF_URL,
-        });
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await client.pushMessage({ to: order["LINE User ID"], messages: [flexMsg as any] });
-        console.log("Resent Flex Message after edit");
-
-        // Send address update confirmation
+        // Confirmation text
         const confirmText = `SHIPPING ADDRESS UPDATED [ Confirmed ]\n#${orderId}\n\n${body.firstName} ${body.lastName}\n${body.address}\n${body.subDistrict} ${body.district}\n${body.province} ${body.postalCode}\nTel: ${body.phone}`;
         await client.pushMessage({
           to: order["LINE User ID"],
           messages: [{ type: "text", text: confirmText }],
         });
 
-        // Update Shopify order shipping if exists
-        if (order["Shopify Order ID"]) {
+        // Update Shopify for PAID orders
+        console.log("[PUT] isPaid:", isPaid, "Shopify Order ID:", order["Shopify Order ID"] || "NONE");
+        if (isPaid && order["Shopify Order ID"]) {
           try {
             await updateShopifyShippingAddress(order["Shopify Order ID"], {
               firstName: body.firstName,
@@ -120,13 +189,12 @@ export async function PUT(
               zip: body.postalCode,
               phone: body.phone,
             });
-            console.log("Shopify shipping updated for order:", orderId);
           } catch (shopifyErr) {
             console.error("Shopify shipping update failed:", shopifyErr);
           }
         }
       } catch (lineErr) {
-        console.error("Resend Flex failed:", lineErr);
+        console.error("Reply failed:", lineErr);
       }
     }
 

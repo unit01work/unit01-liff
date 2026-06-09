@@ -24,6 +24,7 @@ export interface OrderRow {
   "Variant IDs": string;
   "Shopify Order ID": string;
   "Size Changed": string;
+  "Address Changed": string;
 }
 
 function getPrivateKey(): string {
@@ -71,7 +72,7 @@ const HEADERS = [
   "First Name", "Last Name", "Phone", "Address",
   "Sub-district", "District", "Province", "Postal Code",
   "Updated At", "Transaction Ref", "Paid At",
-  "Variant IDs", "Shopify Order ID", "Size Changed",
+  "Variant IDs", "Shopify Order ID", "Size Changed", "Address Changed",
 ];
 
 async function getOrCreateSheet(doc: GoogleSpreadsheet) {
@@ -83,6 +84,13 @@ async function getOrCreateSheet(doc: GoogleSpreadsheet) {
     // Ensure headers exist (sheet might be empty)
     try {
       await sheet.loadHeaderRow();
+      // Auto-migrate: check if all required headers exist
+      const existingHeaders = sheet.headerValues || [];
+      const missingHeaders = HEADERS.filter((h) => !existingHeaders.includes(h));
+      if (missingHeaders.length > 0) {
+        console.log("Adding missing headers:", missingHeaders);
+        await sheet.setHeaderRow([...existingHeaders, ...missingHeaders]);
+      }
     } catch {
       console.log("Setting header row...");
       await sheet.setHeaderRow(HEADERS);
@@ -151,9 +159,7 @@ function matchOrderId(stored: string, search: string): boolean {
 export async function getOrder(orderId: string): Promise<OrderRow | null> {
   const doc = getDoc();
   await doc.loadInfo();
-  const sheet = doc.sheetsByTitle["Orders"];
-  if (!sheet) return null;
-  try { await sheet.loadHeaderRow(); } catch { return null; }
+  const sheet = await getOrCreateSheet(doc);
 
   const rows = await sheet.getRows();
   const row = rows.find((r) => matchOrderId(r.get("Order ID") || "", orderId));
@@ -182,7 +188,60 @@ export async function getOrder(orderId: string): Promise<OrderRow | null> {
     "Variant IDs": row.get("Variant IDs") || "",
     "Shopify Order ID": row.get("Shopify Order ID") || "",
     "Size Changed": row.get("Size Changed") || "",
+    "Address Changed": row.get("Address Changed") || "",
   };
+}
+
+/**
+ * Full order update for reorder flow — updates items, shipping, totals, variant IDs.
+ * Only works on PENDING orders.
+ */
+export async function updateOrderFull(
+  orderId: string,
+  data: {
+    items: string;
+    subtotal: number;
+    shippingFee: number;
+    total: number;
+    firstName: string;
+    lastName: string;
+    phone: string;
+    address: string;
+    subDistrict: string;
+    district: string;
+    province: string;
+    postalCode: string;
+    variantIds: string;
+  }
+): Promise<boolean> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = doc.sheetsByTitle["Orders"];
+  if (!sheet) return false;
+
+  const rows = await sheet.getRows();
+  const row = rows.find((r) => matchOrderId(r.get("Order ID") || "", orderId));
+  if (!row) return false;
+
+  // Only allow reorder on PENDING orders
+  if ((row.get("Status") || "").toUpperCase() !== "PENDING") return false;
+
+  row.set("Items", data.items);
+  row.set("Subtotal", data.subtotal);
+  row.set("Shipping Fee", data.shippingFee);
+  row.set("Total", data.total);
+  row.set("First Name", data.firstName);
+  row.set("Last Name", data.lastName);
+  row.set("Phone", data.phone);
+  row.set("Address", data.address);
+  row.set("Sub-district", data.subDistrict);
+  row.set("District", data.district);
+  row.set("Province", data.province);
+  row.set("Postal Code", data.postalCode);
+  row.set("Variant IDs", data.variantIds);
+  row.set("Updated At", nowBKK());
+  await row.save();
+  return true;
 }
 
 export async function updateOrderShipping(
@@ -200,8 +259,7 @@ export async function updateOrderShipping(
 ): Promise<boolean> {
   const doc = getDoc();
   await doc.loadInfo();
-  const sheet = doc.sheetsByTitle["Orders"];
-  if (!sheet) return false;
+  const sheet = await getOrCreateSheet(doc);
 
   const rows = await sheet.getRows();
   const row = rows.find((r) => matchOrderId(r.get("Order ID") || "", orderId));
@@ -215,8 +273,10 @@ export async function updateOrderShipping(
   row.set("District", data.district);
   row.set("Province", data.province);
   row.set("Postal Code", data.postalCode);
+  row.set("Address Changed", "YES");
   row.set("Updated At", nowBKK());
   await row.save();
+  console.log("[sheets] updateOrderShipping:", orderId, "Address Changed set to YES");
   return true;
 }
 
@@ -282,6 +342,7 @@ export async function findPendingOrder(
         "Variant IDs": row.get("Variant IDs") || "",
         "Shopify Order ID": row.get("Shopify Order ID") || "",
         "Size Changed": row.get("Size Changed") || "",
+        "Address Changed": row.get("Address Changed") || "",
       };
     }
   }
@@ -322,11 +383,70 @@ export async function updateOrderStatus(
   if (!row) return false;
 
   row.set("Status", status);
-  row.set("Transaction Ref", transRef);
-  row.set("Paid At", nowBKK());
+  if (transRef) row.set("Transaction Ref", transRef);
+  if (status === "PAID") row.set("Paid At", nowBKK());
   row.set("Updated At", nowBKK());
   await row.save();
   return true;
+}
+
+/**
+ * Find PENDING orders that are older than `minutes` minutes.
+ * Used by the auto-cancel cron job.
+ */
+export async function findExpiredOrders(minutes: number): Promise<OrderRow[]> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = doc.sheetsByTitle["Orders"];
+  if (!sheet) return [];
+  try { await sheet.loadHeaderRow(); } catch { return []; }
+
+  const rows = await sheet.getRows();
+  const results: OrderRow[] = [];
+  const now = new Date();
+
+  for (const row of rows) {
+    const status = (row.get("Status") || "").toUpperCase();
+    if (status !== "PENDING") continue;
+
+    const dateStr = row.get("Date") || "";
+    if (!dateStr) continue;
+
+    // Parse the date (stored in BKK time: "YYYY-MM-DD HH:mm")
+    const orderDate = new Date(dateStr.replace(" ", "T") + "+07:00");
+    const diffMs = now.getTime() - orderDate.getTime();
+    const diffMin = diffMs / (1000 * 60);
+
+    if (diffMin >= minutes) {
+      results.push({
+        "Order ID": row.get("Order ID"),
+        "Date": dateStr,
+        "LINE User ID": row.get("LINE User ID") || "",
+        "Status": status,
+        "Items": row.get("Items"),
+        "Subtotal": Number(row.get("Subtotal")),
+        "Shipping Fee": Number(row.get("Shipping Fee")),
+        "Total": Number(row.get("Total")),
+        "First Name": row.get("First Name"),
+        "Last Name": row.get("Last Name"),
+        "Phone": row.get("Phone"),
+        "Address": row.get("Address"),
+        "Sub-district": row.get("Sub-district"),
+        "District": row.get("District"),
+        "Province": row.get("Province"),
+        "Postal Code": row.get("Postal Code"),
+        "Updated At": row.get("Updated At"),
+        "Transaction Ref": row.get("Transaction Ref") || "",
+        "Paid At": row.get("Paid At") || "",
+        "Variant IDs": row.get("Variant IDs") || "",
+        "Shopify Order ID": row.get("Shopify Order ID") || "",
+        "Size Changed": row.get("Size Changed") || "",
+        "Address Changed": row.get("Address Changed") || "",
+      });
+    }
+  }
+
+  return results;
 }
 
 /**
@@ -435,6 +555,7 @@ export async function findLatestOrderByUser(userId: string): Promise<OrderRow | 
         "Variant IDs": row.get("Variant IDs") || "",
         "Shopify Order ID": row.get("Shopify Order ID") || "",
         "Size Changed": row.get("Size Changed") || "",
+        "Address Changed": row.get("Address Changed") || "",
       };
     }
   }
@@ -444,6 +565,74 @@ export async function findLatestOrderByUser(userId: string): Promise<OrderRow | 
 /**
  * Update order size: change Items text, Variant IDs, and mark Size Changed = YES.
  */
+/**
+ * Find all active (PAID) orders for a user by LINE userId.
+ * Optional filter: "address" = exclude Address Changed=YES,
+ *                  "size" = exclude Size Changed=YES,
+ *                  undefined = all PAID orders.
+ * Fulfillment filtering is done separately via Shopify API.
+ */
+export async function findActiveOrders(
+  userId: string,
+  filter?: "address" | "size"
+): Promise<OrderRow[]> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = await getOrCreateSheet(doc);
+
+  const rows = await sheet.getRows();
+  const results: OrderRow[] = [];
+
+  // Collect all PAID orders for this user (newest first)
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    if (
+      (row.get("LINE User ID") || "") === userId &&
+      (row.get("Status") || "").toUpperCase() === "PAID"
+    ) {
+      // Apply lock filter
+      const addrChanged = (row.get("Address Changed") || "").toUpperCase();
+      const sizeChanged = (row.get("Size Changed") || "").toUpperCase();
+      if (filter === "address" && addrChanged === "YES") {
+        console.log("[sheets] Filtered out", row.get("Order ID"), "Address Changed =", addrChanged);
+        continue;
+      }
+      if (filter === "size" && sizeChanged === "YES") {
+        console.log("[sheets] Filtered out", row.get("Order ID"), "Size Changed =", sizeChanged);
+        continue;
+      }
+
+      results.push({
+        "Order ID": row.get("Order ID"),
+        "Date": row.get("Date"),
+        "LINE User ID": userId,
+        "Status": row.get("Status"),
+        "Items": row.get("Items"),
+        "Subtotal": Number(row.get("Subtotal")),
+        "Shipping Fee": Number(row.get("Shipping Fee")),
+        "Total": Number(row.get("Total")),
+        "First Name": row.get("First Name"),
+        "Last Name": row.get("Last Name"),
+        "Phone": row.get("Phone"),
+        "Address": row.get("Address"),
+        "Sub-district": row.get("Sub-district"),
+        "District": row.get("District"),
+        "Province": row.get("Province"),
+        "Postal Code": row.get("Postal Code"),
+        "Updated At": row.get("Updated At"),
+        "Transaction Ref": row.get("Transaction Ref") || "",
+        "Paid At": row.get("Paid At") || "",
+        "Variant IDs": row.get("Variant IDs") || "",
+        "Shopify Order ID": row.get("Shopify Order ID") || "",
+        "Size Changed": row.get("Size Changed") || "",
+        "Address Changed": row.get("Address Changed") || "",
+      });
+    }
+  }
+
+  return results;
+}
+
 export async function updateOrderSize(
   orderId: string,
   oldSize: string,

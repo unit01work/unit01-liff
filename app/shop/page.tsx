@@ -23,6 +23,11 @@ function ShopPageInner() {
     return <EditPageLoader orderId={editOrderId} />;
   }
 
+  // Reorder mode: ?page=reorder&order=UT-XXXXXX
+  if (page === "reorder" && editOrderId) {
+    return <ReorderFlow orderId={editOrderId} />;
+  }
+
   return <ShopFlow />;
 }
 
@@ -102,6 +107,184 @@ function EditPageLoader({ orderId }: { orderId: string }) {
       initialPostalCode={order.postalCode}
       onClose={handleClose}
     />
+  );
+}
+
+// Reorder flow — pre-filled with existing order data, updates via PUT
+function ReorderFlow({ orderId }: { orderId: string }) {
+  const { profile } = useUser();
+  const [screen, setScreen] = useState<Screen>("products");
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [orderNo, setOrderNo] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [shippingFee, setShippingFee] = useState(50);
+  const [loading, setLoading] = useState(true);
+  const [shippingPrefill, setShippingPrefill] = useState<ShippingInfo | null>(null);
+
+  // Load products + existing order data
+  useEffect(() => {
+    Promise.all([
+      fetch("/api/products").then((r) => r.json()),
+      fetch(`/api/order/${orderId}`).then((r) => r.json()),
+    ])
+      .then(([prodData, orderData]) => {
+        const prods: Product[] = prodData.products || [];
+        setProducts(prods);
+        if (prodData.shippingFee != null) setShippingFee(prodData.shippingFee);
+
+        // Pre-fill shipping
+        setShippingPrefill({
+          firstName: orderData["First Name"] || "",
+          lastName: orderData["Last Name"] || "",
+          phone: orderData["Phone"] || "",
+          address: orderData["Address"] || "",
+          subDistrict: orderData["Sub-district"] || "",
+          district: orderData["District"] || "",
+          province: orderData["Province"] || "",
+          postalCode: orderData["Postal Code"] || "",
+        });
+
+        // Pre-fill cart from order items + variant IDs
+        const itemsStr: string = orderData["Items"] || "";
+        const variantIdsStr: string = orderData["Variant IDs"] || "";
+        const variantParts = variantIdsStr.split(",").map((p: string) => {
+          const [vid, qty] = p.trim().split(":");
+          return { vid, qty: parseInt(qty) || 1 };
+        });
+
+        // Match variants to products
+        const prefillCart: CartItem[] = [];
+        for (const vp of variantParts) {
+          if (!vp.vid) continue;
+          for (const p of prods) {
+            const v = p.variants.find((v: Variant) => v.shopifyVariantId === vp.vid);
+            if (v) {
+              prefillCart.push({
+                cartId: `c-${Date.now()}-${vp.vid}`,
+                productId: p.id,
+                variantId: v.id,
+                shopifyVariantId: v.shopifyVariantId,
+                name: p.name,
+                size: v.size,
+                price: v.price,
+                image: p.image,
+                qty: vp.qty,
+                maxStock: v.stock,
+              });
+              break;
+            }
+          }
+        }
+
+        // If no variant match, try to parse from items string
+        if (prefillCart.length === 0 && itemsStr) {
+          const match = itemsStr.match(/^(.+?)\s*\((\w+)\)\s*x(\d+)/);
+          if (match) {
+            const name = match[1].trim();
+            const size = match[2];
+            const qty = parseInt(match[3]) || 1;
+            for (const p of prods) {
+              if (p.name.toLowerCase().includes(name.toLowerCase().slice(0, 10))) {
+                const v = p.variants.find((v: Variant) => v.size.toUpperCase() === size.toUpperCase());
+                if (v) {
+                  prefillCart.push({
+                    cartId: `c-${Date.now()}`,
+                    productId: p.id,
+                    variantId: v.id,
+                    shopifyVariantId: v.shopifyVariantId,
+                    name: p.name,
+                    size: v.size,
+                    price: v.price,
+                    image: p.image,
+                    qty,
+                    maxStock: v.stock,
+                  });
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        if (prefillCart.length > 0) setCart(prefillCart);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [orderId]);
+
+  const addToCart = useCallback((p: Product, v: Variant) => {
+    setCart((prev) => {
+      const ex = prev.find((c) => c.variantId === v.id);
+      if (ex) return prev.map((c) => c.variantId === v.id ? { ...c, qty: Math.min(c.qty + 1, v.stock) } : c);
+      return [...prev, { cartId: `c-${Date.now()}`, productId: p.id, variantId: v.id, shopifyVariantId: v.shopifyVariantId, name: p.name, size: v.size, price: v.price, image: p.image, qty: 1, maxStock: v.stock }];
+    });
+  }, []);
+
+  const updateQty = useCallback((id: string, q: number) => {
+    setCart((p) => p.map((c) => c.cartId === id ? { ...c, qty: Math.min(q, c.maxStock) } : c));
+  }, []);
+
+  const removeItem = useCallback((id: string) => {
+    setCart((p) => p.filter((c) => c.cartId !== id));
+  }, []);
+
+  const handleConfirm = useCallback(async (form: ShippingInfo) => {
+    if (submitting) return;
+    setSubmitting(true);
+
+    try {
+      const res = await fetch(`/api/order/${orderId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cart: cart.map((c) => ({ name: c.name, size: c.size, price: c.price, qty: c.qty, shopifyVariantId: c.shopifyVariantId })),
+          shipping: form,
+        }),
+      });
+
+      if (!res.ok) {
+        alert("เกิดข้อผิดพลาด กรุณาลองใหม่");
+        setSubmitting(false);
+        return;
+      }
+
+      setOrderNo(`#${orderId.replace("#", "")}`);
+      setScreen("closing");
+    } catch {
+      alert("เกิดข้อผิดพลาด กรุณาลองใหม่");
+      setSubmitting(false);
+    }
+  }, [cart, orderId, submitting]);
+
+  const handleReset = useCallback(() => {
+    // Close LIFF window after reorder
+    (async () => {
+      try {
+        const liff = (await import("@line/liff")).default;
+        if (liff.isInClient()) { liff.closeWindow(); return; }
+      } catch { /* not in LIFF */ }
+      window.location.href = "/shop";
+    })();
+  }, []);
+
+  if (loading) {
+    return (
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", background: C.cream, flexDirection: "column", gap: 16 }}>
+        <div style={{ width: 24, height: 24, border: `2px solid ${C.bdr}`, borderTopColor: C.mist, borderRadius: "50%", animation: "spin 800ms linear infinite" }} />
+        <div style={{ fontFamily: FM, fontSize: 10, color: C.gris, letterSpacing: "0.14em", textTransform: "uppercase" }}>LOADING ORDER...</div>
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {screen === "products" && <ScreenProducts products={products} cart={cart} onAdd={addToCart} onGoCart={() => setScreen("cart")} />}
+      {screen === "cart" && <ScreenCart cart={cart} shippingFee={shippingFee} onUpdateQty={updateQty} onRemove={removeItem} onBack={() => setScreen("products")} onCheckout={() => setScreen("shipping")} />}
+      {screen === "shipping" && <ScreenShipping cart={cart} shippingFee={shippingFee} prefill={shippingPrefill} onBack={() => setScreen("cart")} onConfirm={handleConfirm} />}
+      {screen === "closing" && <ClosingOverlay orderNo={orderNo} onReset={handleReset} />}
+    </>
   );
 }
 

@@ -75,7 +75,7 @@ export function buildOrderFlex({
   });
 
   const cleanOrderId = orderId.replace("#", "");
-  const editUri = `${liffUrl}?page=edit&order=${cleanOrderId}`;
+  const reorderUri = `${liffUrl}?page=reorder&order=${cleanOrderId}`;
 
   return {
     type: "flex",
@@ -194,7 +194,7 @@ export function buildOrderFlex({
 
           { type: "separator", color: "#EBE7E4" },
 
-          // ── EDIT BUTTON ──
+          // ── EDIT BUTTON (reorder) ──
           {
             type: "box",
             layout: "vertical",
@@ -202,32 +202,9 @@ export function buildOrderFlex({
             contents: [
               {
                 type: "button",
-                action: { type: "uri", label: "Edit information", uri: editUri },
+                action: { type: "uri", label: "Edit information", uri: reorderUri },
                 style: "link",
                 color: "#C47237",
-                height: "sm",
-              },
-            ],
-          },
-
-          { type: "separator", color: "#EBE7E4" },
-
-          // ── CONTACT BUTTON ──
-          {
-            type: "box",
-            layout: "vertical",
-            paddingAll: "sm",
-            contents: [
-              {
-                type: "button",
-                action: {
-                  type: "postback",
-                  label: "Contact us",
-                  data: `action=contact&orderId=${cleanOrderId}`,
-                  displayText: "Contact us",
-                },
-                style: "link",
-                color: "#888888",
                 height: "sm",
               },
             ],

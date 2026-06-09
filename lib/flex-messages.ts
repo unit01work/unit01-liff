@@ -7,10 +7,14 @@ const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID || "201
 /**
  * Contact Us welcome menu — "How can we help?" with 4 options.
  */
-export function buildContactFlex(orderId: string, locked = false) {
+export function buildContactFlex(
+  orderId: string,
+  locks: { addressLocked?: boolean; sizeLocked?: boolean } = {}
+) {
   const cleanId = orderId.replace("#", "");
   const displayId = orderId.startsWith("#") ? orderId : `#${orderId}`;
   const editUri = `${LIFF_URL}?page=edit&order=${cleanId}`;
+  const { addressLocked = false, sizeLocked = false } = locks;
 
   return {
     type: "flex",
@@ -46,7 +50,7 @@ export function buildContactFlex(orderId: string, locked = false) {
           },
           { type: "separator", color: "#EBE7E4" },
           // Option 1: Edit shipping address
-          ...(locked ? [{
+          ...(addressLocked ? [{
             type: "box",
             layout: "horizontal",
             paddingAll: "lg",
@@ -68,7 +72,7 @@ export function buildContactFlex(orderId: string, locked = false) {
           }]),
           { type: "separator", color: "#EBE7E4" },
           // Option 2: Change size
-          ...(locked ? [{
+          ...(sizeLocked ? [{
             type: "box",
             layout: "horizontal",
             paddingAll: "lg",
@@ -114,6 +118,178 @@ export function buildContactFlex(orderId: string, locked = false) {
               { type: "text", text: "›", size: "sm", color: "#C4BFBB", flex: 0, align: "end" },
             ],
           },
+        ],
+      },
+    },
+  };
+}
+
+/**
+ * Contact Us menu from Rich Menu — no order ID in header.
+ * Options 1-3 use postback without orderId; option 4 is chat_team.
+ */
+export function buildContactMenuNoOrder() {
+  return {
+    type: "flex",
+    altText: "Order Support",
+    contents: {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "none",
+        contents: [
+          // Header
+          {
+            type: "box",
+            layout: "vertical",
+            backgroundColor: "#E5E0DD",
+            paddingAll: "lg",
+            contents: [
+              { type: "text", text: "ORDER SUPPORT", size: "xxs", color: "#555555", weight: "bold" },
+            ],
+          },
+          // Body
+          {
+            type: "box",
+            layout: "vertical",
+            paddingAll: "lg",
+            contents: [
+              { type: "text", text: "How can we help?", size: "sm", color: "#1A1A1A", weight: "bold" },
+              { type: "text", text: "Select an option below", size: "xxs", color: "#999999", margin: "xs" },
+            ],
+          },
+          { type: "separator", color: "#EBE7E4" },
+          // Option 1: Edit shipping address
+          {
+            type: "box",
+            layout: "horizontal",
+            paddingAll: "lg",
+            action: { type: "postback", data: "action=edit_address_menu", displayText: "Edit shipping address" },
+            contents: [
+              { type: "text", text: "[ 1 ]", size: "xs", color: "#1A1A1A", weight: "bold", flex: 0 },
+              { type: "text", text: "Edit shipping address", size: "xs", color: "#1A1A1A", weight: "bold", margin: "lg", flex: 1 },
+              { type: "text", text: "›", size: "sm", color: "#C4BFBB", flex: 0, align: "end" },
+            ],
+          },
+          { type: "separator", color: "#EBE7E4" },
+          // Option 2: Change size
+          {
+            type: "box",
+            layout: "horizontal",
+            paddingAll: "lg",
+            action: { type: "postback", data: "action=change_size_menu", displayText: "Change size" },
+            contents: [
+              { type: "text", text: "[ 2 ]", size: "xs", color: "#1A1A1A", weight: "bold", flex: 0 },
+              { type: "text", text: "Change size", size: "xs", color: "#1A1A1A", weight: "bold", margin: "lg", flex: 1 },
+              { type: "text", text: "›", size: "sm", color: "#C4BFBB", flex: 0, align: "end" },
+            ],
+          },
+          { type: "separator", color: "#EBE7E4" },
+          // Option 3: Track my order
+          {
+            type: "box",
+            layout: "horizontal",
+            paddingAll: "lg",
+            action: { type: "postback", data: "action=track_menu", displayText: "Track my order" },
+            contents: [
+              { type: "text", text: "[ 3 ]", size: "xs", color: "#1A1A1A", weight: "bold", flex: 0 },
+              { type: "text", text: "Track my order", size: "xs", color: "#1A1A1A", weight: "bold", margin: "lg", flex: 1 },
+              { type: "text", text: "›", size: "sm", color: "#C4BFBB", flex: 0, align: "end" },
+            ],
+          },
+          { type: "separator", color: "#EBE7E4" },
+          // Option 4: Chat with team
+          {
+            type: "box",
+            layout: "horizontal",
+            paddingAll: "lg",
+            action: { type: "postback", data: "action=chat_team", displayText: "Chat with team" },
+            contents: [
+              { type: "text", text: "[ 4 ]", size: "xs", color: "#999999", weight: "bold", flex: 0 },
+              { type: "text", text: "Chat with team", size: "xs", color: "#999999", weight: "bold", margin: "lg", flex: 1 },
+              { type: "text", text: "›", size: "sm", color: "#C4BFBB", flex: 0, align: "end" },
+            ],
+          },
+        ],
+      },
+    },
+  };
+}
+
+/**
+ * Select Order Flex — when user has multiple active orders, let them choose.
+ * nextAction maps back to the original action: edit_address, change_size, track
+ */
+export function buildSelectOrderFlex(
+  orders: { orderId: string; items: string; total: number }[],
+  nextAction: string
+) {
+  const orderBoxes = orders.flatMap((order, idx) => {
+    const displayId = order.orderId.startsWith("#") ? order.orderId : `#${order.orderId}`;
+    const cleanId = order.orderId.replace("#", "");
+    const box = {
+      type: "box",
+      layout: "vertical",
+      paddingAll: "lg",
+      action: {
+        type: "postback",
+        data: `action=select_order&orderId=${cleanId}&nextAction=${nextAction}`,
+        displayText: displayId,
+      },
+      contents: [
+        { type: "text", text: displayId, size: "xs", color: "#1A1A1A", weight: "bold" },
+        {
+          type: "text",
+          text: `${order.items} — ฿${order.total.toLocaleString()}`,
+          size: "xxs",
+          color: "#999999",
+          margin: "xs",
+          wrap: true,
+        },
+      ],
+    };
+    // Add separator between orders
+    if (idx < orders.length - 1) {
+      return [box, { type: "separator", color: "#EBE7E4" }];
+    }
+    return [box];
+  });
+
+  return {
+    type: "flex",
+    altText: "Select Order",
+    contents: {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "none",
+        contents: [
+          // Header
+          {
+            type: "box",
+            layout: "vertical",
+            backgroundColor: "#E5E0DD",
+            paddingAll: "lg",
+            contents: [
+              { type: "text", text: "SELECT ORDER", size: "xxs", color: "#555555", weight: "bold" },
+            ],
+          },
+          // Body
+          {
+            type: "box",
+            layout: "vertical",
+            paddingAll: "lg",
+            contents: [
+              { type: "text", text: "Select which order:", size: "sm", color: "#1A1A1A", weight: "bold" },
+            ],
+          },
+          { type: "separator", color: "#EBE7E4" },
+          // Order list
+          ...orderBoxes,
         ],
       },
     },
