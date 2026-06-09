@@ -33,7 +33,8 @@ UNIT-01 = ร้านขายเสื้อสตรีทแวร์ ขา
 ## Environment Variables (ค่าจริงอยู่ใน .env.local — ห้ามเขียนค่าจริงที่นี่)
 | ตัวแปร | ใช้ทำอะไร |
 |--------|-----------|
-| LIFF_ID | LIFF app id |
+| NEXT_PUBLIC_LIFF_ID | LIFF app id |
+| LINE_CHANNEL_ID | Messaging API channel id |
 | LINE_CHANNEL_ACCESS_TOKEN | ส่งข้อความ/Flex ผ่าน LINE |
 | LINE_CHANNEL_SECRET | ตรวจ signature webhook |
 | SHOPIFY_STORE | โดเมนร้าน (uqv71h-wf.myshopify.com) |
