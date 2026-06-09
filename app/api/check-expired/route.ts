@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getOrder, findExpiredOrders, updateOrderStatus } from "@/lib/sheets";
 import { getLineClient } from "@/lib/line";
 
+// auto-deploy test: GitHub push -> Vercel (2026-06-10)
 const EXPIRE_MINUTES = 5;
 
 /**
