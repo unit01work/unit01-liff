@@ -59,6 +59,7 @@ UNIT-01 = ร้านขายเสื้อสตรีทแวร์ ขา
 - **อย่าใช้ `atkn_...`** (token จาก Dev Dashboard automation) — ใช้ไม่ได้ จะได้ 401
 - Scopes: read_products, read_inventory, read/write draft_orders, read/write orders
 - API version ที่ใช้: 2026-04
+- **ลำดับสินค้า:** sort ตาม product id ascending (= ลำดับการสร้าง) ทุกจุดที่ดึงสินค้า (หน้า LIFF + Stock tab + change-size lookups) → ของเก่าคงที่ ของใหม่ต่อท้ายเสมอ ไม่แทรกกลาง (Shopify REST `/products.json` default order ไม่นิ่ง)
 - **สำคัญ:** order ที่สร้างต้องเก็บ Real Order ID (order_id) ไม่ใช่ Draft ID — ออเดอร์เก่าก่อนแก้บัคนี้จะอัพเดทที่อยู่ใน Shopify ไม่ได้
 - แก้ที่อยู่ Shopify: ใช้ GraphQL `orderUpdate` ส่ง `provinceCode` (ISO 3166-2:TH เช่น TH-10, TH-41) ไม่ใช่ `province`
 
