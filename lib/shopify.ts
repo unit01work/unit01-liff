@@ -3,6 +3,7 @@
  */
 
 import type { OrderRow } from "./sheets";
+import { compareSizes } from "./products";
 
 interface ShopifyLineItem {
   variant_id: number;
@@ -616,8 +617,13 @@ export async function getAllVariantsWithStock(): Promise<VariantStock[]> {
   );
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const p of sorted as any[]) {
+    // Within each product, sort variants S → M → L → XL (unknowns last) so the
+    // Stock tab matches the LIFF shop. Product order itself stays id-ascending.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for (const v of (p.variants || []) as any[]) {
+    const variants = ((p.variants || []) as any[])
+      .slice()
+      .sort((a, b) => compareSizes(a.title, b.title));
+    for (const v of variants) {
       out.push({
         product: p.title,
         size: v.title,
