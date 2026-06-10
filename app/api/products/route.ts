@@ -39,10 +39,13 @@ export async function GET() {
 
     const data = await response.json();
 
-    // Fetch custom.color metafield for all products in one GraphQL call,
-    // then merge by numeric product id. REST products.json can't return
-    // metafields inline, so this is a single extra request (not N+1).
+    // Fetch custom.color_line + custom.sizechart metafields for all products
+    // in one GraphQL call, then merge by numeric product id. REST products.json
+    // can't return metafields inline, so this is a single extra request (not N+1).
+    // - color_line: single_line_text → label.
+    // - sizechart: file_reference (MediaImage) → resolve to CDN image URL.
     const colorById = new Map<string, string>();
+    const sizeGuideById = new Map<string, string>();
     try {
       const gqlRes = await fetch(
         `https://${process.env.SHOPIFY_STORE}/admin/api/2026-04/graphql.json`,
@@ -54,7 +57,7 @@ export async function GET() {
           },
           body: JSON.stringify({
             query:
-              '{ products(first:100, query:"status:active") { nodes { id metafield(namespace:"custom", key:"color_line") { value } } } }',
+              '{ products(first:100, query:"status:active") { nodes { id color: metafield(namespace:"custom", key:"color_line") { value } sizechart: metafield(namespace:"custom", key:"sizechart") { reference { ... on MediaImage { image { url } } } } } } }',
           }),
           next: { revalidate: 300 },
         }
@@ -64,13 +67,16 @@ export async function GET() {
         const nodes = gql?.data?.products?.nodes ?? [];
         for (const n of nodes) {
           const numericId = String(n.id).split("/").pop() || "";
-          const val = n?.metafield?.value;
-          if (numericId && val) colorById.set(numericId, String(val).trim());
+          if (!numericId) continue;
+          const colorVal = n?.color?.value;
+          if (colorVal) colorById.set(numericId, String(colorVal).trim());
+          const guideUrl = n?.sizechart?.reference?.image?.url;
+          if (guideUrl) sizeGuideById.set(numericId, String(guideUrl));
         }
       }
     } catch (e) {
-      console.error("[products] color metafield fetch failed:", e);
-      // Non-fatal — products still render without color label.
+      console.error("[products] metafield fetch failed:", e);
+      // Non-fatal — products still render without color label / size guide.
     }
 
     const products = (data.products as ShopifyProduct[])
@@ -117,6 +123,7 @@ export async function GET() {
           lot,
           badge,
           color: colorById.get(String(p.id)) || undefined,
+          sizeGuideUrl: sizeGuideById.get(String(p.id)) || undefined,
           image: p.images[0]?.src || "",
           images: p.images.map((img) => img.src),
           variants,

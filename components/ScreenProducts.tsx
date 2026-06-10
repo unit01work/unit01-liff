@@ -39,6 +39,8 @@ export function ScreenProducts({
   const [sel, setSel] = useState<Record<string, string | null>>({});
   const [imgIdx, setImgIdx] = useState<Record<string, number>>({});
   const [toast, setToast] = useState<string | null>(null);
+  // URL of the size-guide image to show in an in-page modal (null = closed).
+  const [guide, setGuide] = useState<string | null>(null);
   const cc = cart.reduce((s, c) => s + c.qty, 0);
 
   const handleAdd = (p: Product) => {
@@ -363,24 +365,25 @@ export function ScreenProducts({
                   {"// SELECT SIZE"}
                 </span>
                 {p.sizeGuideUrl && (
-                  <a
-                    href={p.sizeGuideUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    type="button"
+                    onClick={() => setGuide(p.sizeGuideUrl!)}
                     style={{
                       fontFamily: FM,
                       fontSize: 9,
                       letterSpacing: "0.12em",
                       textTransform: "uppercase",
                       color: C.mist,
-                      textDecoration: "none",
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      padding: "0 0 1px",
                       borderBottom: `1px solid ${C.mist}`,
-                      paddingBottom: 1,
                       whiteSpace: "nowrap",
                     }}
                   >
                     SIZE GUIDE ↗
-                  </a>
+                  </button>
                 )}
               </div>
 
@@ -491,7 +494,95 @@ export function ScreenProducts({
         </div>
       </div>
       {toast && <Toast msg={`ADDED · ${toast}`} onClose={() => setToast(null)} />}
-      <style>{`@keyframes toastIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}.u01-carousel::-webkit-scrollbar{display:none}`}</style>
+
+      {/* SIZE GUIDE MODAL — in-page image overlay (no navigation) */}
+      {guide && (
+        <div
+          onClick={() => setGuide(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 100,
+            background: "rgba(0,0,0,0.82)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+            animation: "guideFade 160ms ease",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              position: "relative",
+              width: "100%",
+              maxWidth: 420,
+              maxHeight: "86vh",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 8,
+                fontFamily: FM,
+                fontSize: 10,
+                letterSpacing: "0.14em",
+                textTransform: "uppercase",
+                color: C.cream,
+              }}
+            >
+              <span>SIZE GUIDE</span>
+              <button
+                type="button"
+                onClick={() => setGuide(null)}
+                aria-label="Close"
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: C.cream,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: 4,
+                }}
+              >
+                <CloseIcon />
+              </button>
+            </div>
+            <div
+              style={{
+                position: "relative",
+                flex: 1,
+                minHeight: 0,
+                background: C.cream,
+                borderRadius: 2,
+                overflow: "hidden",
+              }}
+            >
+              {/* Unoptimized: Shopify CDN already serves optimized assets and the
+                  exact intrinsic size is unknown here. */}
+              <img
+                src={guide}
+                alt="Size guide"
+                style={{
+                  display: "block",
+                  width: "100%",
+                  height: "auto",
+                  maxHeight: "78vh",
+                  objectFit: "contain",
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style>{`@keyframes toastIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}@keyframes guideFade{from{opacity:0}to{opacity:1}}.u01-carousel::-webkit-scrollbar{display:none}`}</style>
     </>
   );
 }
