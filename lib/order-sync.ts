@@ -48,6 +48,48 @@ export async function syncPaidOrderToShopify(
   await alertOwnerOrderFailed(orderId, freshOrder, lastErr);
 }
 
+/**
+ * Push a LINE alert to the shop owner when a POST-PAYMENT EDIT (change size /
+ * edit shipping address) was saved to the sheet but failed to sync to Shopify.
+ * The Shopify order still exists with stale data, so the owner must fix it by
+ * hand. Never silent.
+ */
+export async function alertOwnerEditFailed(
+  orderId: string,
+  order: Partial<OrderRow>,
+  kind: "size" | "shipping",
+  reason: string
+): Promise<void> {
+  if (
+    !OWNER_LINE_USER_ID ||
+    !process.env.LINE_CHANNEL_ACCESS_TOKEN ||
+    process.env.LINE_CHANNEL_ACCESS_TOKEN === "YOUR_CHANNEL_ACCESS_TOKEN_HERE"
+  ) {
+    console.error("[order-sync] Cannot alert owner (edit) — missing LINE token / owner id");
+    return;
+  }
+  const customer = `${order?.["First Name"] || ""} ${order?.["Last Name"] || ""}`.trim();
+  const what = kind === "size" ? "เปลี่ยนไซส์" : "แก้ที่อยู่จัดส่ง";
+  const text =
+    `⚠️ ${what}สำเร็จใน Sheet แต่ Shopify ไม่อัพเดท\n\n` +
+    `Order: ${orderId}\n` +
+    `Shopify Order ID: ${order?.["Shopify Order ID"] || "-"}\n` +
+    `ลูกค้า: ${customer || "-"}\n` +
+    `สินค้า: ${order?.["Items"] || "-"}\n` +
+    `สาเหตุ: ${reason}\n\n` +
+    `⛔️ ต้องแก้ใน Shopify ด้วยตนเอง (Sheet กับ Shopify ไม่ตรงกัน)`;
+  try {
+    const cl = getLineClient();
+    await cl.pushMessage({
+      to: OWNER_LINE_USER_ID,
+      messages: [{ type: "text", text }],
+    });
+    console.log("[order-sync] Owner alerted about failed edit sync:", orderId, kind);
+  } catch (e) {
+    console.error("[order-sync] Failed to push owner edit alert:", e);
+  }
+}
+
 /** Push a LINE alert to the shop owner about a failed Shopify order sync. */
 export async function alertOwnerOrderFailed(
   orderId: string,

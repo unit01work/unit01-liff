@@ -414,8 +414,16 @@ export async function updateShopifyShippingAddress(
     city: address.city,
     zip: address.zip,
     countryCode: "TH",
-    phone: address.phone,
   };
+  // Shopify requires E.164 phone. Same rule as order creation — normalize to
+  // +66, and if it can't be normalized, omit it rather than let an invalid
+  // local format (0xxxxxxxxx) get the whole update rejected with a 422.
+  const e164Phone = toE164ThaiPhone(address.phone);
+  if (e164Phone) {
+    shippingAddress.phone = e164Phone;
+  } else if (address.phone) {
+    console.warn("[shopify] updateShipping: phone not normalizable, omitting:", address.phone);
+  }
   const provinceCode = toShopifyProvinceCode(address.province);
   if (provinceCode) {
     shippingAddress.provinceCode = provinceCode;

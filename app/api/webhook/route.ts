@@ -7,6 +7,7 @@ import {
   checkDuplicateTransRef,
   updateOrderStatus,
   getOrder,
+  setOrderSyncStatus,
   updateOrderSize,
   findLatestOrderByUser,
   findActiveOrders,
@@ -23,6 +24,7 @@ import {
 import {
   syncPaidOrderToShopify,
   alertOwnerOrderFailed,
+  alertOwnerEditFailed,
 } from "@/lib/order-sync";
 import {
   buildContactFlex,
@@ -360,15 +362,34 @@ async function handleSelectSize(orderId: string, newSize: string, newVariantId: 
   // Update Google Sheets
   await updateOrderSize(orderId, oldSize, newSize, newVariantId);
 
-  // Update Shopify Order line item variant
+  // Update Shopify Order line item variant.
+  // The sheet is already updated above — if Shopify fails we must NOT stay
+  // silent (sheet/Shopify would diverge). Alert the owner + flag the row.
   if (order["Shopify Order ID"] && oldVariantId) {
+    let synced = false;
+    let reason = "";
     try {
-      await updateShopifyOrderVariant(order["Shopify Order ID"], oldVariantId, newVariantId);
-      console.log("[webhook] Shopify order variant updated:", orderId);
+      synced = await updateShopifyOrderVariant(order["Shopify Order ID"], oldVariantId, newVariantId);
+      if (!synced) reason = "Shopify orderEdit returned errors (see logs)";
     } catch (shopifyErr) {
-      console.error("[webhook] Shopify variant update failed:", shopifyErr);
-      // Don't block — Sheets is already updated
+      reason = shopifyErr instanceof Error ? shopifyErr.message : String(shopifyErr);
+      console.error("[webhook] Shopify variant update failed:", reason);
     }
+    if (synced) {
+      console.log("[webhook] Shopify order variant updated:", orderId);
+      await setOrderSyncStatus(orderId, "").catch(() => {});
+    } else {
+      console.error("[webhook] Size sync FAILED (not silent):", orderId, reason);
+      await setOrderSyncStatus(orderId, `FAILED size→Shopify: ${reason}`).catch((e) =>
+        console.error("[webhook] could not flag sync status:", e)
+      );
+      await alertOwnerEditFailed(orderId, order, "size", reason);
+    }
+  } else if (oldVariantId) {
+    // Paid order with no Shopify Order ID — the original sync never happened.
+    console.error("[webhook] Size change but no Shopify Order ID:", orderId);
+    await setOrderSyncStatus(orderId, "FAILED size→Shopify: no Shopify Order ID").catch(() => {});
+    await alertOwnerEditFailed(orderId, order, "size", "No Shopify Order ID on order row");
   }
 
   console.log(`[webhook] Size changed: ${orderId} ${oldSize} → ${newSize}`);

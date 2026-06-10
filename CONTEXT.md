@@ -57,13 +57,18 @@ UNIT-01 = ร้านขายเสื้อสตรีทแวร์ ขา
 - ร้านจริง: **uqv71h-wf.myshopify.com** (admin slug: unit-01-2, โดเมน: unit-01official.com)
 - แอปที่ใช้จริง: **LIFF Integration** — token เป็น `shpat_...` (Admin API access token จาก OAuth install) ติดตั้งบนร้านนี้แล้ว **อย่าถอน**
 - **อย่าใช้ `atkn_...`** (token จาก Dev Dashboard automation) — ใช้ไม่ได้ จะได้ 401
-- Scopes: read_products, read_inventory, read/write draft_orders, read/write orders
+- Scopes: read_products, read_inventory, read/write draft_orders, read/write orders, **read/write order_edits**
+- **สำคัญ — `write_order_edits`:** การเปลี่ยน size ในออเดอร์ที่จ่ายแล้ว ใช้ Order Edit API (`orderEditBegin/SetQuantity/AddVariant/Commit`) ซึ่ง**บังคับต้องมี scope `write_order_edits`** (`write_orders` ธรรมดาไม่พอ → ได้ ACCESS_DENIED). ถ้าเพิ่ม scope ในแอป Shopify ต้อง Release เวอร์ชันใหม่ + ให้ร้านอัปเดต/อนุมัติสิทธิ์ token เดิมถึงจะได้สิทธิ์เพิ่ม (token ไม่เปลี่ยน)
 - API version ที่ใช้: 2026-04
 - **ลำดับสินค้า:** sort ตาม product id ascending (= ลำดับการสร้าง) ทุกจุดที่ดึงสินค้า (หน้า LIFF + Stock tab + change-size lookups) → ของเก่าคงที่ ของใหม่ต่อท้ายเสมอ ไม่แทรกกลาง (Shopify REST `/products.json` default order ไม่นิ่ง)
 - **สำคัญ:** order ที่สร้างต้องเก็บ Real Order ID (order_id) ไม่ใช่ Draft ID — ออเดอร์เก่าก่อนแก้บัคนี้จะอัพเดทที่อยู่ใน Shopify ไม่ได้
 - แก้ที่อยู่ Shopify: ใช้ GraphQL `orderUpdate` ส่ง `provinceCode` (ISO 3166-2:TH เช่น TH-10, TH-41) ไม่ใช่ `province`
 - **เบอร์โทร (E.164 +66):** Shopify เริ่ม reject เบอร์ไทยแบบ local (`0xxxxxxxxx`) ใน shipping_address → 422 "Phone number invalid" ทำให้ออเดอร์จ่ายแล้วแต่ไม่ถูกสร้างใน Shopify. แก้: `toE164ThaiPhone` ใน `lib/shopify.ts` normalize เป็น `+66xxxxxxxxx` (รองรับ `0xxx`, `66xxx`, `+66xxx`, มีขีด/เว้นวรรค). normalize ไม่ได้ → **ไม่ใส่เบอร์ในที่อยู่** + แปะเบอร์ดิบใน note (`Phone(raw): ...`) เพื่อไม่ให้ทั้งออเดอร์ถูก reject
 - **ไม่ swallow error อีกต่อไป (`lib/order-sync.ts`):** หลังจ่ายเงิน webhook เรียก `syncPaidOrderToShopify` → สร้าง Shopify order แบบ retry 3 ครั้ง (delay 600ms). ถ้ายังพังทุกครั้ง → เขียน `FAILED: <reason>` ลงคอลัมน์ Shopify Order ID ใน Sheet **และ** push LINE แจ้งเจ้าของร้าน (`OWNER_LINE_USER_ID`, override ได้ด้วย env) → ออเดอร์ที่จ่ายแล้วจะไม่หายเงียบ ๆ อีก
+- **แก้หลังจ่ายเงิน (change size / edit shipping) ต้อง sync เข้า Shopify:**
+  - **เปลี่ยน size:** `updateShopifyOrderVariant` (Order Edit API, ต้องมี `write_order_edits` — ดูข้างบน). ไม่เกี่ยวกับเบอร์
+  - **แก้ที่อยู่:** `updateShopifyShippingAddress` (GraphQL `orderUpdate`) — **normalize เบอร์เป็น +66 ด้วย `toE164ThaiPhone`** เหมือนตอนสร้าง (normalize ไม่ได้ → ไม่ใส่เบอร์) endpoint นี้รับเบอร์ local ได้แต่ normalize กันเหนียว
+  - **กันเงียบหายทั้ง 2 จุด:** ถ้า Shopify ไม่สำเร็จ (return false/throw/ไม่มี Shopify Order ID) → เขียน `FAILED ...→Shopify: <reason>` ลงคอลัมน์ **"Sync Status"** (column ใหม่ ไม่ทับ Shopify Order ID เดิม) ผ่าน `setOrderSyncStatus()` **และ** push LINE แจ้งเจ้าของ (`alertOwnerEditFailed`). สำเร็จ → เคลียร์ Sync Status เป็น "". จุดเรียก: `app/api/webhook/route.ts` (size), `app/api/order/[orderId]/route.ts` (shipping)
 
 ### สินค้า (Variant IDs)
 **01 Training Oversize Tee** (PROTOTYPE-01 TEE) ฿1,800
@@ -82,7 +87,7 @@ UNIT-01 = ร้านขายเสื้อสตรีทแวร์ ขา
 
 ## Google Sheets "UNIT-01 Orders"
 ### Tab "Orders" (คอลัมน์)
-Order ID, Date, LINE User ID, Status (PENDING/PAID/SHIPPED/EXPIRED), Items, Subtotal, Shipping Fee, Total, First Name, Last Name, Phone, Address, Sub-district, District, Province, Postal Code, Updated At, Variant IDs, Shopify Order ID, Transaction Ref, Paid At, Address Changed (YES/NO), Size Changed (YES/NO)
+Order ID, Date, LINE User ID, Status (PENDING/PAID/SHIPPED/EXPIRED), Items, Subtotal, Shipping Fee, Total, First Name, Last Name, Phone, Address, Sub-district, District, Province, Postal Code, Updated At, Variant IDs, Shopify Order ID, Transaction Ref, Paid At, Address Changed (YES/NO), Size Changed (YES/NO), **Sync Status** (ว่าง = ปกติ / `FAILED ...→Shopify: <reason>` = แก้ใน Sheet แล้วแต่ Shopify sync ไม่ผ่าน ต้องแก้มือ — column นี้ระบบเพิ่มให้อัตโนมัติถ้ายังไม่มี)
 
 ### Tab "Stock" (เสร็จแล้ว — ภาพรวม)
 Product, Size, Variant ID, Shopify Stock, Reserved (PENDING), Available, Sold (PAID), Last Updated
