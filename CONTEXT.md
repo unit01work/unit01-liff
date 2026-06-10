@@ -77,11 +77,15 @@ UNIT-01 = ร้านขายเสื้อสตรีทแวร์ ขา
 ### Tab "Orders" (คอลัมน์)
 Order ID, Date, LINE User ID, Status (PENDING/PAID/SHIPPED/EXPIRED), Items, Subtotal, Shipping Fee, Total, First Name, Last Name, Phone, Address, Sub-district, District, Province, Postal Code, Updated At, Variant IDs, Shopify Order ID, Transaction Ref, Paid At, Address Changed (YES/NO), Size Changed (YES/NO)
 
-### Tab "Stock" (กำลังทำ — ภาพรวม)
+### Tab "Stock" (เสร็จแล้ว — ภาพรวม)
 Product, Size, Variant ID, Shopify Stock, Reserved (PENDING), Available, Sold (PAID), Last Updated
+- `refreshStockTab()` ใน `lib/sheets.ts` เขียนทับทั้ง tab จาก Shopify inventory + นับ Reserved/Sold จาก tab Orders
+- check-expired (cron ทุก 1 นาที) เรียก refresh ทุกรอบ → ตัวเลขสดเสมอ
 
-### Tab "Stock Log" (กำลังทำ — ประวัติ)
+### Tab "Stock Log" (เสร็จแล้ว — ประวัติ append-only)
 Date, Type (RESERVED/SOLD/RETURNED/RESTOCK), Product, Size, Variant ID, Change, Stock After, Order ID, Note
+- `appendStockLog()` / `logOrderStockMovement()` ใน `lib/sheets.ts`
+- บันทึกอัตโนมัติ: RESERVED ตอนสั่งซื้อ (order route), SOLD ตอนจ่าย (webhook), RETURNED ตอนหมดอายุ (check-expired)
 
 > Finance เป็นไฟล์แยก (UNIT-01 expense-template) มี tab REVENUE อยู่แล้ว — ยังไม่เชื่อม รอทำทีหลัง
 
@@ -119,8 +123,8 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 ---
 
 ## สถานะระบบ (อัพเดทล่าสุด)
-**เสร็จแล้ว:** LIFF shop ดึง Shopify, order→Sheets, returning customer auto-fill, Flex+QR, SlipOK→PAID, Shopify Order auto-create, Thai zip auto-fill, Contact Us ครบ, lock system, pre-order/reorder flow, auto-cancel 5 นาที (cron-job.org), backup folder, GitHub auto-deploy
-**กำลังทำ:** Stock + Stock Log tabs
+**เสร็จแล้ว:** LIFF shop ดึง Shopify, order→Sheets, returning customer auto-fill, Flex+QR, SlipOK→PAID, Shopify Order auto-create, Thai zip auto-fill, Contact Us ครบ, lock system, pre-order/reorder flow, auto-cancel 5 นาที (cron-job.org), backup folder, GitHub auto-deploy, **Stock + Stock Log tabs**
+**กำลังทำ:** —
 **รอทำ:** Finance/REVENUE เชื่อม, Platform Fee, ต้นทุน/กำไร, Admin Dashboard, Custom Domain, Rich Menu เต็มรูปแบบ
 
 ---
