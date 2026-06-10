@@ -12,6 +12,7 @@ import {
   findLatestOrderByUser,
   findActiveOrders,
   findExpiredOrders,
+  logOrderStockMovement,
 } from "@/lib/sheets";
 import {
   createShopifyDraftOrder,
@@ -160,6 +161,9 @@ async function handleSlipImage(
     const orderId = order["Order ID"];
     console.log("[slip] Updating order:", orderId);
     await updateOrderStatus(orderId, "PAID", transRef);
+
+    // Stock Log: SOLD (reserved stock is now a confirmed sale — no extra deduction)
+    await logOrderStockMovement(order, "SOLD", 0, "จ่ายเงินแล้ว ขายสำเร็จ");
 
     // 7. Create Shopify Draft Order
     try {

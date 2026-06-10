@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getLineClient } from "@/lib/line";
 import { saveOrder } from "@/lib/order-store";
 import { buildOrderFlex } from "@/lib/flex-order";
-import { appendOrder } from "@/lib/sheets";
+import { appendOrder, appendStockLog } from "@/lib/sheets";
 
 interface CartItem {
   name: string;
@@ -88,6 +88,20 @@ export async function POST(request: NextRequest) {
         variantIds,
       });
       console.log("✅ Saved to Google Sheets");
+
+      // Stock Log: RESERVED (soft-reserve while PENDING)
+      for (const c of cart) {
+        if (!c.shopifyVariantId) continue;
+        await appendStockLog({
+          type: "RESERVED",
+          product: c.name,
+          size: c.size,
+          variantId: c.shopifyVariantId,
+          change: -c.qty,
+          orderId,
+          note: "จองชั่วคราว (PENDING)",
+        });
+      }
     } catch (sheetErr) {
       console.error("❌ Google Sheets save failed:", sheetErr instanceof Error ? sheetErr.message : String(sheetErr));
       // Don't block the order if Sheets fails

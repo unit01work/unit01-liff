@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getOrder, findExpiredOrders, updateOrderStatus } from "@/lib/sheets";
+import {
+  getOrder,
+  findExpiredOrders,
+  updateOrderStatus,
+  logOrderStockMovement,
+  refreshStockTab,
+  type OrderRow,
+} from "@/lib/sheets";
 import { getLineClient } from "@/lib/line";
 
-// auto-deploy test: GitHub push -> Vercel (2026-06-10)
 const EXPIRE_MINUTES = 5;
 
 /**
@@ -48,21 +54,22 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ expired: 0, reason: "not yet expired", minutesLeft: Math.ceil(EXPIRE_MINUTES - diffMin) });
       }
 
-      await expireOrder(order["Order ID"], order["LINE User ID"], client);
+      await expireOrder(order, client);
+      await refreshStockTab();
       return NextResponse.json({ expired: 1 });
     }
 
     // Check all expired orders
     const expiredOrders = await findExpiredOrders(EXPIRE_MINUTES);
-    if (expiredOrders.length === 0) {
-      return NextResponse.json({ expired: 0 });
-    }
 
     let count = 0;
     for (const order of expiredOrders) {
-      await expireOrder(order["Order ID"], order["LINE User ID"], client);
+      await expireOrder(order, client);
       count++;
     }
+
+    // Keep the Stock overview tab live on every cron tick (even if nothing expired)
+    await refreshStockTab();
 
     return NextResponse.json({ expired: count });
   } catch (err) {
@@ -71,16 +78,22 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function expireOrder(orderId: string, lineUserId: string, client: any) {
+async function expireOrder(order: OrderRow, client: unknown) {
+  const orderId = order["Order ID"];
+  const lineUserId = order["LINE User ID"];
   const displayId = orderId.startsWith("#") ? orderId : `#${orderId}`;
 
   await updateOrderStatus(orderId, "EXPIRED", "");
   console.log(`[check-expired] Expired order: ${orderId}`);
 
-  if (client && lineUserId) {
+  // Stock Log: RETURNED (release the soft-reserve back to available)
+  await logOrderStockMovement(order, "RETURNED", +1, "ออเดอร์หมดอายุ คืนสต็อก");
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lineClient = client as any;
+  if (lineClient && lineUserId) {
     try {
-      await client.pushMessage({
+      await lineClient.pushMessage({
         to: lineUserId,
         messages: [{
           type: "text",

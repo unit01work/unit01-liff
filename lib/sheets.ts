@@ -1,5 +1,6 @@
 import { GoogleSpreadsheet } from "google-spreadsheet";
 import { JWT } from "google-auth-library";
+import { getAllVariantsWithStock } from "./shopify";
 
 export interface OrderRow {
   "Order ID": string;
@@ -673,4 +674,206 @@ export async function updateOrderSize(
   row.set("Updated At", nowBKK());
   await row.save();
   return true;
+}
+
+/* ──────────────────────────────────────────────────────────────
+ * STOCK SYSTEM — "Stock" overview tab + "Stock Log" history tab
+ * ────────────────────────────────────────────────────────────── */
+
+const STOCK_HEADERS = [
+  "Product", "Size", "Variant ID", "Shopify Stock",
+  "Reserved", "Available", "Sold", "Last Updated",
+];
+
+const STOCK_LOG_HEADERS = [
+  "Date", "Type", "Product", "Size", "Variant ID",
+  "Change", "Stock After", "Order ID", "Note",
+];
+
+/** Generic get-or-create tab that ensures the given headers exist. */
+async function getOrCreateTab(
+  doc: GoogleSpreadsheet,
+  title: string,
+  headers: string[]
+) {
+  let sheet = doc.sheetsByTitle[title];
+  if (!sheet) {
+    console.log(`[sheets] Creating '${title}' tab...`);
+    sheet = await doc.addSheet({ title, headerValues: headers });
+    return sheet;
+  }
+  try {
+    await sheet.loadHeaderRow();
+    const existing = sheet.headerValues || [];
+    const missing = headers.filter((h) => !existing.includes(h));
+    if (missing.length > 0) {
+      await sheet.setHeaderRow([...existing, ...missing]);
+    }
+  } catch {
+    await sheet.setHeaderRow(headers);
+  }
+  return sheet;
+}
+
+export interface OrderLineItem {
+  product: string;
+  size: string;
+  variantId: string;
+  qty: number;
+}
+
+/**
+ * Parse an order's line items by zipping the "Items" text
+ * ("Name (Size) xQty, ...") with the "Variant IDs" field ("vid:qty,...").
+ */
+export function parseOrderItems(order: OrderRow): OrderLineItem[] {
+  const itemsStr = order["Items"] || "";
+  const variantIds = order["Variant IDs"] || "";
+
+  const vidParts = variantIds
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const itemParts = itemsStr
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const result: OrderLineItem[] = [];
+  const len = Math.max(vidParts.length, itemParts.length);
+  for (let i = 0; i < len; i++) {
+    const [vid, vidQty] = (vidParts[i] || "").split(":");
+    const m = (itemParts[i] || "").match(/^(.+?)\s*\((\w+)\)\s*x(\d+)$/);
+    const product = m ? m[1].trim() : "";
+    const size = m ? m[2] : "";
+    const qty = m ? parseInt(m[3], 10) : parseInt(vidQty, 10) || 1;
+    const variantId = (vid || "").trim();
+    if (!variantId && !product) continue;
+    result.push({ product, size, variantId, qty: qty || 1 });
+  }
+  return result;
+}
+
+export type StockLogType = "RESERVED" | "SOLD" | "RETURNED" | "RESTOCK";
+
+export interface StockLogEntry {
+  type: StockLogType;
+  product: string;
+  size: string;
+  variantId: string;
+  change: number;
+  stockAfter?: number | null;
+  orderId?: string;
+  note?: string;
+}
+
+/** Append one movement row to the "Stock Log" tab (never overwrites). */
+export async function appendStockLog(entry: StockLogEntry): Promise<void> {
+  try {
+    const doc = getDoc();
+    await doc.loadInfo();
+    const sheet = await getOrCreateTab(doc, "Stock Log", STOCK_LOG_HEADERS);
+    await sheet.addRow({
+      "Date": nowBKK(),
+      "Type": entry.type,
+      "Product": entry.product,
+      "Size": entry.size,
+      "Variant ID": entry.variantId,
+      "Change": entry.change > 0 ? `+${entry.change}` : String(entry.change),
+      "Stock After": entry.stockAfter ?? "",
+      "Order ID": entry.orderId || "",
+      "Note": entry.note || "",
+    });
+  } catch (err) {
+    console.error("[sheets] appendStockLog failed:", err);
+  }
+}
+
+/** Append a Stock Log row for every line item of an order. */
+export async function logOrderStockMovement(
+  order: OrderRow,
+  type: StockLogType,
+  changePerUnit: number,
+  note: string
+): Promise<void> {
+  const items = parseOrderItems(order);
+  for (const it of items) {
+    await appendStockLog({
+      type,
+      product: it.product,
+      size: it.size,
+      variantId: it.variantId,
+      change: changePerUnit * it.qty,
+      orderId: order["Order ID"],
+      note,
+    });
+  }
+}
+
+/**
+ * Rebuild the "Stock" overview tab from authoritative sources:
+ * Shopify inventory + live Reserved (PENDING) / Sold (PAID) counts
+ * from the Orders tab. Overwrites all data rows.
+ */
+export async function refreshStockTab(): Promise<void> {
+  const variants = await getAllVariantsWithStock();
+  if (variants.length === 0) {
+    console.warn("[sheets] refreshStockTab: no variants from Shopify, skipping");
+    return;
+  }
+
+  const doc = getDoc();
+  await doc.loadInfo();
+
+  // Ensure the history tab exists too, so both tabs appear together
+  await getOrCreateTab(doc, "Stock Log", STOCK_LOG_HEADERS);
+
+  // Count Reserved (PENDING) and Sold (PAID) per variant from Orders tab
+  const reserved: Record<string, number> = {};
+  const sold: Record<string, number> = {};
+  const ordersSheet = doc.sheetsByTitle["Orders"];
+  if (ordersSheet) {
+    try {
+      await ordersSheet.loadHeaderRow();
+      const rows = await ordersSheet.getRows();
+      for (const row of rows) {
+        const status = (row.get("Status") || "").toUpperCase();
+        if (status !== "PENDING" && status !== "PAID") continue;
+        const vids = (row.get("Variant IDs") || "") as string;
+        for (const part of vids.split(",")) {
+          const [vid, q] = part.trim().split(":");
+          if (!vid) continue;
+          const qty = parseInt(q, 10) || 1;
+          if (status === "PENDING") reserved[vid] = (reserved[vid] || 0) + qty;
+          else sold[vid] = (sold[vid] || 0) + qty;
+        }
+      }
+    } catch (err) {
+      console.error("[sheets] refreshStockTab: failed reading Orders:", err);
+    }
+  }
+
+  const stockSheet = await getOrCreateTab(doc, "Stock", STOCK_HEADERS);
+  await stockSheet.clearRows().catch(() => {});
+
+  const now = nowBKK();
+  const newRows = variants.map((v) => {
+    const r = reserved[v.variantId] || 0;
+    return {
+      "Product": v.product,
+      "Size": v.size,
+      "Variant ID": v.variantId,
+      "Shopify Stock": v.stock,
+      "Reserved": r,
+      "Available": v.stock - r,
+      "Sold": sold[v.variantId] || 0,
+      "Last Updated": now,
+    };
+  });
+
+  if (newRows.length > 0) {
+    await stockSheet.addRows(newRows);
+  }
+  console.log(`[sheets] refreshStockTab: wrote ${newRows.length} variant rows`);
 }

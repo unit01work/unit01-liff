@@ -587,6 +587,42 @@ export async function isOrderUnfulfilled(shopifyOrderId: string): Promise<boolea
   }
 }
 
+export interface VariantStock {
+  product: string;
+  size: string;
+  variantId: string;
+  stock: number;
+}
+
+/**
+ * Get every active product variant with its current Shopify inventory.
+ * Used to refresh the "Stock" overview tab in Google Sheets.
+ */
+export async function getAllVariantsWithStock(): Promise<VariantStock[]> {
+  const res = await shopifyFetch(
+    `/products.json?status=active&fields=id,title,variants`
+  );
+  if (!res.ok) {
+    console.error("[shopify] getAllVariantsWithStock error:", res.status);
+    return [];
+  }
+  const data = await res.json();
+  const out: VariantStock[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const p of (data.products || []) as any[]) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const v of (p.variants || []) as any[]) {
+      out.push({
+        product: p.title,
+        size: v.title,
+        variantId: String(v.id),
+        stock: v.inventory_quantity ?? 0,
+      });
+    }
+  }
+  return out;
+}
+
 /**
  * Get product variants with stock from Shopify.
  */
