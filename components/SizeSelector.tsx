@@ -12,6 +12,7 @@ interface SizeBtnProps {
 
 export function SizeBtn({ label, sel, dis, onClick }: SizeBtnProps) {
   const arm = "7px",
+    thick = "1.5px",
     clr = dis ? C.dis : "#333333";
   const bg = sel
     ? { background: C.mist, color: C.cream, backgroundImage: "none" }
@@ -20,7 +21,7 @@ export function SizeBtn({ label, sel, dis, onClick }: SizeBtnProps) {
           .fill(`linear-gradient(${clr},${clr})`)
           .join(","),
         backgroundRepeat: "no-repeat",
-        backgroundSize: `${arm} 1px,1px ${arm},${arm} 1px,1px ${arm},${arm} 1px,1px ${arm},${arm} 1px,1px ${arm}`,
+        backgroundSize: `${arm} ${thick},${thick} ${arm},${arm} ${thick},${thick} ${arm},${arm} ${thick},${thick} ${arm},${arm} ${thick},${thick} ${arm}`,
         backgroundPosition:
           "top left,top left,top right,top right,bottom left,bottom left,bottom right,bottom right",
       };

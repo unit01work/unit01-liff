@@ -12,6 +12,7 @@ export const C = {
   err: "#C44A3A",
   dis: "#B8B0AD",
   bdr: "#D8D2CF",
+  idle: "#D9D9D8",
 };
 
 export const FM =
