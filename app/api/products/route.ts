@@ -40,6 +40,9 @@ export async function GET() {
     const data = await response.json();
 
     const products = (data.products as ShopifyProduct[])
+      // Stable order: sort by product id ascending (= creation order).
+      // New products always append to the end, existing ones never shift.
+      .sort((a, b) => a.id - b.id)
       .filter((p) => p.images?.length > 0) // Must have image
       .map((p) => {
         const tags = p.tags

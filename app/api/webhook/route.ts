@@ -240,8 +240,13 @@ async function handleChangeSize(orderId: string) {
     return [{ type: "text" as const, text: "Unable to check available sizes." }];
   }
   const productsData = await productsRes.json();
+  // Stable order: sort by product id ascending (consistency with LIFF + Stock tab).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const product = productsData.products?.find((p: any) =>
+  const sortedProducts = (productsData.products || []).sort(
+    (a: any, b: any) => Number(a.id) - Number(b.id)
+  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const product = sortedProducts.find((p: any) =>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     p.variants?.some((v: any) => String(v.id) === currentVariantId)
   );
@@ -322,10 +327,15 @@ async function handleSelectSize(orderId: string, newSize: string, newVariantId: 
   );
   if (productsRes.ok) {
     const productsData = await productsRes.json();
+    // Stable order: sort by product id ascending (consistency with LIFF + Stock tab).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sortedProducts = (productsData.products || []).sort(
+      (a: any, b: any) => Number(a.id) - Number(b.id)
+    );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let targetVariant: any = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for (const p of productsData.products || []) {
+    for (const p of sortedProducts) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const v = p.variants?.find((v: any) => String(v.id) === newVariantId);
       if (v) { targetVariant = v; break; }

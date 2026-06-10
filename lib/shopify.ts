@@ -608,8 +608,14 @@ export async function getAllVariantsWithStock(): Promise<VariantStock[]> {
   }
   const data = await res.json();
   const out: VariantStock[] = [];
+  // Stable order: sort by product id ascending (= creation order) so the
+  // Stock tab matches the LIFF shop. New products append to the end.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  for (const p of (data.products || []) as any[]) {
+  const sorted = ((data.products || []) as any[]).sort(
+    (a, b) => Number(a.id) - Number(b.id)
+  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const p of sorted as any[]) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const v of (p.variants || []) as any[]) {
       out.push({
