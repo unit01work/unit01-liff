@@ -5,7 +5,7 @@ import Image from "next/image";
 import { C, FM, fmt } from "@/lib/tokens";
 import type { Product, Variant } from "@/lib/products";
 import { CartIcon, CloseIcon } from "./Icons";
-import { BracketChain, SectHead, MicroDiv, PageStamp } from "./MicroGraphics";
+import { MicroDiv, PageStamp } from "./MicroGraphics";
 import { SizeBtn } from "./SizeSelector";
 import { Toast } from "./Toast";
 
@@ -164,17 +164,25 @@ export function ScreenProducts({
           const price = activePrice(p);
           return (
             <div key={p.id}>
-              <SectHead num={String(idx + 1).padStart(2, "0")} label="PRODUCT" />
-              <div style={{ borderBottom: `1.5px dotted ${C.dis}`, margin: "0 16px" }} />
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "center",
-                  padding: "12px 16px 4px",
-                  color: C.gris,
-                }}
-              >
-                <BracketChain count={11} size={9} gap={3} color={C.gris} />
+              {/* SECTION HEADER — barcode stamp + index counter */}
+              <div style={{ padding: "14px 16px 4px" }}>
+                <PageStamp color={C.gris} />
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginTop: 12,
+                    fontFamily: FM,
+                    fontSize: 10,
+                    letterSpacing: "0.12em",
+                    textTransform: "uppercase",
+                    color: C.gris,
+                  }}
+                >
+                  <span>{`[ ${String(idx + 1).padStart(3, "0")}/${String(idx + 1).padStart(3, "0")} ]`}</span>
+                  <span style={{ fontWeight: 700, letterSpacing: "0.04em" }}>{">>>>"}</span>
+                </div>
               </div>
 
               {/* Image */}
