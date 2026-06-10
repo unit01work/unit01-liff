@@ -368,6 +368,83 @@ export async function getShopifyOrderStatus(shopifyOrderId: string) {
   return data.order;
 }
 
+/** Required Admin API scopes for the full order flow to work. */
+export const REQUIRED_SHOPIFY_SCOPES = [
+  "read_products",
+  "read_inventory",
+  "write_draft_orders",
+  "write_orders",
+  "write_order_edits", // needed for change-size (Order Edit API)
+];
+
+/**
+ * Verify the token has every scope the app depends on. Returns the missing
+ * ones so a cron / deploy check can alert before a customer hits the gap
+ * (e.g. the write_order_edits scope that silently broke change-size).
+ */
+export async function checkRequiredScopes(): Promise<{
+  ok: boolean;
+  missing: string[];
+  granted: string[];
+}> {
+  const res = await fetch(
+    `https://${process.env.SHOPIFY_STORE}/admin/oauth/access_scopes.json`,
+    { headers: { "X-Shopify-Access-Token": process.env.SHOPIFY_ADMIN_API_TOKEN! } }
+  );
+  if (!res.ok) {
+    console.error("[shopify] checkRequiredScopes error:", res.status);
+    return { ok: false, missing: REQUIRED_SHOPIFY_SCOPES, granted: [] };
+  }
+  const data = await res.json();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const granted: string[] = (data.access_scopes || []).map((s: any) => s.handle);
+  const missing = REQUIRED_SHOPIFY_SCOPES.filter((s) => !granted.includes(s));
+  return { ok: missing.length === 0, missing, granted };
+}
+
+export interface ShopifyOrderSnapshot {
+  found: boolean;
+  name?: string;
+  // Variant IDs that are still active on the order (current_quantity > 0).
+  activeVariantIds: string[];
+  shippingPhone?: string;
+  fulfillmentStatus?: string | null;
+}
+
+/**
+ * Read the minimal order shape the reconciliation cron needs to compare against
+ * the sheet: which variants are actually on the order now (after any edits) and
+ * the shipping phone. Uses current_quantity so order-edits are reflected.
+ */
+export async function getShopifyOrderSnapshot(
+  shopifyOrderId: string
+): Promise<ShopifyOrderSnapshot> {
+  const res = await shopifyFetch(
+    `/orders/${shopifyOrderId}.json?fields=id,name,fulfillment_status,line_items,shipping_address`
+  );
+  if (!res.ok) {
+    console.error("[shopify] getOrderSnapshot error:", res.status, shopifyOrderId);
+    return { found: false, activeVariantIds: [] };
+  }
+  const order = (await res.json()).order;
+  if (!order) return { found: false, activeVariantIds: [] };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const activeVariantIds = (order.line_items || [])
+    // current_quantity reflects order-edits; fall back to quantity if absent.
+    .filter((li: any) => (li.current_quantity ?? li.quantity ?? 0) > 0)
+    .map((li: any) => String(li.variant_id))
+    .filter(Boolean);
+
+  return {
+    found: true,
+    name: order.name,
+    activeVariantIds,
+    shippingPhone: order.shipping_address?.phone || "",
+    fulfillmentStatus: order.fulfillment_status ?? null,
+  };
+}
+
 /**
  * Update shipping address on a Shopify order.
  *

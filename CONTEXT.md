@@ -46,7 +46,7 @@ UNIT-01 = ร้านขายเสื้อสตรีทแวร์ ขา
 | SLIPOK_API_KEY | API key SlipOK |
 | PROMPTPAY_ID | เลขพร้อมเพย์รับเงิน |
 | SHIPPING_FEE | ค่าส่ง (50) |
-| CRON_SECRET | กันคนอื่นเรียก /api/check-expired |
+| CRON_SECRET | กันคนอื่นเรียก cron endpoints (/api/check-expired, /api/reconcile, /api/scope-check) — ส่งเป็น `Authorization: Bearer <secret>` หรือ `?key=<secret>` |
 
 > ถ้าต้องการค่าจริง: `cat .env.local` หรือดู backup ที่ `Desktop/unit01-liff-backup/02-ENV-VARIABLES/`
 > หมายเหตุ Vercel: ฝั่ง Vercel ใช้ `GOOGLE_PRIVATE_KEY_BASE64` (base64) แทน `GOOGLE_PRIVATE_KEY` และมี `SHOPIFY_CLIENT_SECRET` เพิ่ม
@@ -141,8 +141,18 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 
 ---
 
+## Monitoring / Guards (กันปัญหา sync ไม่ให้เกิดอีก)
+ออกแบบเป็น 4 ชั้น หลังเจอบั๊ก "จ่ายแล้ว/แก้แล้วแต่ Shopify ไม่อัพเดทแบบเงียบ" 2 รอบ:
+1. **ห้ามเงียบ (in-line):** ทุกการเขียน Shopify (สร้าง order / change size / edit shipping) เช็คผลจริง พังเมื่อไหร่ → push LINE เจ้าของ + เขียน `FAILED` ลง Sheet (คอลัมน์ Shopify Order ID ตอนสร้าง, คอลัมน์ "Sync Status" ตอนแก้)
+2. **Reconciliation รายวัน — `GET /api/reconcile`** (auth CRON_SECRET): สแกนออเดอร์ PAID ล่าสุด (`?hours=` default 72) เทียบ Sheet ↔ Shopify → ออเดอร์ไม่มี Shopify ID / Shopify หาย / variant(ไซส์)ไม่ตรง / มี Sync Status FAILED → สรุป push LINE ทุกรอบ (รวม " all clear"). `?silent=1` = ไม่ push. ฟังก์ชัน: `findRecentPaidOrders` (sheets), `getShopifyOrderSnapshot` (shopify, ใช้ `current_quantity` สะท้อน order-edit)
+3. **Scope health check — `GET /api/scope-check`** (auth CRON_SECRET): เช็ค token มี scope ครบตาม `REQUIRED_SHOPIFY_SCOPES` (`read_products, read_inventory, write_draft_orders, write_orders, write_order_edits`) ขาด → push LINE แจ้งทันที (กันเคส scope หายเหมือน `write_order_edits`). reconcile ก็เรียกเช็ค scope ในตัวด้วย
+4. **Smoke test ก่อนขาย:** (ยังไม่ทำเป็นสคริปต์ถาวร — รันทดสอบ manual)
+- **ตั้ง cron บน cron-job.org เพิ่ม 2 ตัว (รายวัน):** `https://unit01-liff.vercel.app/api/reconcile?key=<CRON_SECRET>` และ `https://unit01-liff.vercel.app/api/scope-check?key=<CRON_SECRET>` (helper `pushOwner` ใน `lib/order-sync.ts` ใช้ส่ง LINE หาเจ้าของ)
+
+---
+
 ## สถานะระบบ (อัพเดทล่าสุด)
-**เสร็จแล้ว:** LIFF shop ดึง Shopify, order→Sheets, returning customer auto-fill, Flex+QR, SlipOK→PAID, Shopify Order auto-create, Thai zip auto-fill, Contact Us ครบ, lock system, pre-order/reorder flow, auto-cancel 5 นาที (cron-job.org), backup folder, GitHub auto-deploy, **Stock + Stock Log tabs**, **UI patch รอบ 1-3 (Products/Checkout/Edit) + หัวสินค้าบาร์โค้ดสแตมป์ + Patch 03 (Cart UI: ปุ่ม gradient/เทา, ลบ IMAGE/LOT) + สีสินค้าจาก metafield `custom.color_line` + รูปสินค้าหลายรูป (carousel swipe + dots) + Size Guide จาก metafield `custom.sizechart` (เปิด modal ในหน้าเดิม) + รูปสินค้า object-fit contain (ไม่ crop) + เรียง size S→M→L→XL (helper กลาง ใช้ทั้ง LIFF + Stock tab)**
+**เสร็จแล้ว:** LIFF shop ดึง Shopify, order→Sheets, returning customer auto-fill, Flex+QR, SlipOK→PAID, Shopify Order auto-create, Thai zip auto-fill, Contact Us ครบ, lock system, pre-order/reorder flow, auto-cancel 5 นาที (cron-job.org), backup folder, GitHub auto-deploy, **Stock + Stock Log tabs**, **UI patch รอบ 1-3 (Products/Checkout/Edit) + หัวสินค้าบาร์โค้ดสแตมป์ + Patch 03 (Cart UI: ปุ่ม gradient/เทา, ลบ IMAGE/LOT) + สีสินค้าจาก metafield `custom.color_line` + รูปสินค้าหลายรูป (carousel swipe + dots) + Size Guide จาก metafield `custom.sizechart` (เปิด modal ในหน้าเดิม) + รูปสินค้า object-fit contain (ไม่ crop) + เรียง size S→M→L→XL (helper กลาง ใช้ทั้ง LIFF + Stock tab)** + **normalize เบอร์ +66 ทั้งตอนสร้าง+แก้ที่อยู่ + กันเงียบหายทุกจุด (สร้าง/change size/edit shipping → LINE alert + FAILED/Sync Status) + change size ต้องมี scope `write_order_edits` + Reconciliation cron (/api/reconcile) + Scope health check (/api/scope-check)**
 **กำลังทำ:** —
 **รอทำ:** Finance/REVENUE เชื่อม, Platform Fee, ต้นทุน/กำไร, Admin Dashboard, Custom Domain, Rich Menu เต็มรูปแบบ
 

@@ -49,6 +49,32 @@ export async function syncPaidOrderToShopify(
 }
 
 /**
+ * Push an arbitrary text alert to the shop owner. Returns false if LINE isn't
+ * configured. Used by health-check / reconciliation crons.
+ */
+export async function pushOwner(text: string): Promise<boolean> {
+  if (
+    !OWNER_LINE_USER_ID ||
+    !process.env.LINE_CHANNEL_ACCESS_TOKEN ||
+    process.env.LINE_CHANNEL_ACCESS_TOKEN === "YOUR_CHANNEL_ACCESS_TOKEN_HERE"
+  ) {
+    console.error("[order-sync] pushOwner — missing LINE token / owner id");
+    return false;
+  }
+  try {
+    const cl = getLineClient();
+    await cl.pushMessage({
+      to: OWNER_LINE_USER_ID,
+      messages: [{ type: "text", text: text.slice(0, 4900) }],
+    });
+    return true;
+  } catch (e) {
+    console.error("[order-sync] pushOwner failed:", e);
+    return false;
+  }
+}
+
+/**
  * Push a LINE alert to the shop owner when a POST-PAYMENT EDIT (change size /
  * edit shipping address) was saved to the sheet but failed to sync to Shopify.
  * The Shopify order still exists with stale data, so the owner must fix it by

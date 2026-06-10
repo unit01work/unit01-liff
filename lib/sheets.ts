@@ -670,6 +670,64 @@ export async function findActiveOrders(
   return results;
 }
 
+/**
+ * Return all PAID orders that were paid within the last `sinceHours` hours.
+ * Used by the daily reconciliation cron to compare Sheet vs Shopify without
+ * scanning the entire (growing) order history every run.
+ */
+export async function findRecentPaidOrders(
+  sinceHours = 72
+): Promise<OrderRow[]> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = await getOrCreateSheet(doc);
+  const rows = await sheet.getRows();
+
+  const cutoff = Date.now() - sinceHours * 60 * 60 * 1000;
+  const results: OrderRow[] = [];
+
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i];
+    if ((row.get("Status") || "").toUpperCase() !== "PAID") continue;
+
+    // Prefer "Paid At", fall back to "Date" / "Updated At".
+    const stamp = row.get("Paid At") || row.get("Date") || row.get("Updated At") || "";
+    if (stamp) {
+      const t = new Date(stamp.replace(" ", "T") + "+07:00").getTime();
+      if (!Number.isNaN(t) && t < cutoff) continue;
+    }
+
+    results.push({
+      "Order ID": row.get("Order ID"),
+      "Date": row.get("Date"),
+      "LINE User ID": row.get("LINE User ID"),
+      "Status": row.get("Status"),
+      "Items": row.get("Items"),
+      "Subtotal": Number(row.get("Subtotal")),
+      "Shipping Fee": Number(row.get("Shipping Fee")),
+      "Total": Number(row.get("Total")),
+      "First Name": row.get("First Name"),
+      "Last Name": row.get("Last Name"),
+      "Phone": row.get("Phone"),
+      "Address": row.get("Address"),
+      "Sub-district": row.get("Sub-district"),
+      "District": row.get("District"),
+      "Province": row.get("Province"),
+      "Postal Code": row.get("Postal Code"),
+      "Updated At": row.get("Updated At"),
+      "Transaction Ref": row.get("Transaction Ref") || "",
+      "Paid At": row.get("Paid At") || "",
+      "Variant IDs": row.get("Variant IDs") || "",
+      "Shopify Order ID": row.get("Shopify Order ID") || "",
+      "Size Changed": row.get("Size Changed") || "",
+      "Address Changed": row.get("Address Changed") || "",
+      "Sync Status": row.get("Sync Status") || "",
+    });
+  }
+
+  return results;
+}
+
 export async function updateOrderSize(
   orderId: string,
   oldSize: string,
