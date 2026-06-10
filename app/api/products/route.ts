@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { compareSizes } from "@/lib/products";
 
 interface ShopifyVariant {
   id: number;
@@ -101,13 +102,17 @@ export async function GET() {
           ? `LOT ${lotTag.replace("lot-", "").padStart(2, "0")}`
           : "";
 
-        const variants = p.variants.map((v) => ({
-          id: String(v.id),
-          shopifyVariantId: String(v.id),
-          size: v.title,
-          price: parseFloat(v.price),
-          stock: v.inventory_quantity ?? 0,
-        }));
+        const variants = p.variants
+          .map((v) => ({
+            id: String(v.id),
+            shopifyVariantId: String(v.id),
+            size: v.title,
+            price: parseFloat(v.price),
+            stock: v.inventory_quantity ?? 0,
+          }))
+          // Sort sizes S → M → L → XL (unknowns last) so the shop buttons
+          // are always in size order, not Shopify's arbitrary variant order.
+          .sort((a, b) => compareSizes(a.size, b.size));
 
         // Base price: lowest variant price
         const prices = variants.map((v) => v.price);
