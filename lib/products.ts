@@ -14,6 +14,9 @@ export interface Product {
   priceMax: number;
   lot: string;
   badge: string | null;
+  // Product color from Shopify metafield custom.color_line (e.g. "BLACK").
+  // Undefined when not set on the product — UI hides the color label.
+  color?: string;
   image: string;
   images: string[];
   variants: Variant[];

@@ -167,6 +167,7 @@ function ReorderFlow({ orderId }: { orderId: string }) {
                 shopifyVariantId: v.shopifyVariantId,
                 name: p.name,
                 size: v.size,
+                color: p.color,
                 price: v.price,
                 image: p.image,
                 qty: vp.qty,
@@ -195,6 +196,7 @@ function ReorderFlow({ orderId }: { orderId: string }) {
                     shopifyVariantId: v.shopifyVariantId,
                     name: p.name,
                     size: v.size,
+                    color: p.color,
                     price: v.price,
                     image: p.image,
                     qty,
@@ -217,7 +219,7 @@ function ReorderFlow({ orderId }: { orderId: string }) {
     setCart((prev) => {
       const ex = prev.find((c) => c.variantId === v.id);
       if (ex) return prev.map((c) => c.variantId === v.id ? { ...c, qty: Math.min(c.qty + 1, v.stock) } : c);
-      return [...prev, { cartId: `c-${Date.now()}`, productId: p.id, variantId: v.id, shopifyVariantId: v.shopifyVariantId, name: p.name, size: v.size, price: v.price, image: p.image, qty: 1, maxStock: v.stock }];
+      return [...prev, { cartId: `c-${Date.now()}`, productId: p.id, variantId: v.id, shopifyVariantId: v.shopifyVariantId, name: p.name, size: v.size, color: p.color, price: v.price, image: p.image, qty: 1, maxStock: v.stock }];
     });
   }, []);
 
@@ -331,7 +333,7 @@ function ShopFlow() {
     setCart((prev) => {
       const ex = prev.find((c) => c.variantId === v.id);
       if (ex) return prev.map((c) => c.variantId === v.id ? { ...c, qty: Math.min(c.qty + 1, v.stock) } : c);
-      return [...prev, { cartId: `c-${Date.now()}`, productId: p.id, variantId: v.id, shopifyVariantId: v.shopifyVariantId, name: p.name, size: v.size, price: v.price, image: p.image, qty: 1, maxStock: v.stock }];
+      return [...prev, { cartId: `c-${Date.now()}`, productId: p.id, variantId: v.id, shopifyVariantId: v.shopifyVariantId, name: p.name, size: v.size, color: p.color, price: v.price, image: p.image, qty: 1, maxStock: v.stock }];
     });
   }, []);
 

@@ -14,6 +14,7 @@ export interface CartItem {
   shopifyVariantId: string;
   name: string;
   size: string;
+  color?: string;
   price: number;
   image: string;
   qty: number;
@@ -213,34 +214,6 @@ export function ScreenCart({
                   sizes="80px"
                   style={{ objectFit: "cover" }}
                 />
-                <span
-                  style={{
-                    position: "absolute",
-                    top: 6,
-                    left: 6,
-                    fontFamily: FM,
-                    fontSize: 8,
-                    letterSpacing: "0.12em",
-                    color: "rgba(255,255,255,0.8)",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  LOT 04
-                </span>
-                <span
-                  style={{
-                    position: "absolute",
-                    bottom: 6,
-                    left: 6,
-                    fontFamily: FM,
-                    fontSize: 8,
-                    letterSpacing: "0.12em",
-                    color: "rgba(255,255,255,0.6)",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  IMAGE
-                </span>
               </div>
 
               <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
@@ -287,7 +260,8 @@ export function ScreenCart({
                     textTransform: "uppercase",
                   }}
                 >
-                  SIZE {item.size} · BLACK
+                  SIZE {item.size}
+                  {item.color ? ` · ${item.color.toUpperCase()}` : ""}
                 </span>
 
                 <div
@@ -378,8 +352,7 @@ export function ScreenCart({
         style={{
           position: "sticky",
           bottom: 0,
-          background: "rgba(244,239,236,0.96)",
-          backdropFilter: "blur(16px)",
+          background: "transparent",
           borderTop: `1px solid ${C.light}`,
           padding: "12px 16px 14px",
           zIndex: 20,
@@ -390,9 +363,9 @@ export function ScreenCart({
             onClick={onBack}
             style={{
               padding: "16px 18px",
-              background: "transparent",
+              background: C.idle,
               color: C.mist,
-              border: `1px solid ${C.mist}`,
+              border: "none",
               fontFamily: FM,
               fontWeight: 700,
               fontSize: 11,
@@ -409,7 +382,8 @@ export function ScreenCart({
             style={{
               width: "100%",
               padding: "16px 18px",
-              background: C.mist,
+              background:
+                "linear-gradient(90deg, #111111 0%, #111111 18%, #42272C 38%, #824E39 54%, #D28A3E 72%, #EDBA5F 88%, #F5D280 100%)",
               color: C.cream,
               border: "none",
               fontFamily: FM,

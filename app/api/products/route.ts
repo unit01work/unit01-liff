@@ -39,6 +39,40 @@ export async function GET() {
 
     const data = await response.json();
 
+    // Fetch custom.color metafield for all products in one GraphQL call,
+    // then merge by numeric product id. REST products.json can't return
+    // metafields inline, so this is a single extra request (not N+1).
+    const colorById = new Map<string, string>();
+    try {
+      const gqlRes = await fetch(
+        `https://${process.env.SHOPIFY_STORE}/admin/api/2026-04/graphql.json`,
+        {
+          method: "POST",
+          headers: {
+            "X-Shopify-Access-Token": process.env.SHOPIFY_ADMIN_API_TOKEN!,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            query:
+              '{ products(first:100, query:"status:active") { nodes { id metafield(namespace:"custom", key:"color_line") { value } } } }',
+          }),
+          next: { revalidate: 300 },
+        }
+      );
+      if (gqlRes.ok) {
+        const gql = await gqlRes.json();
+        const nodes = gql?.data?.products?.nodes ?? [];
+        for (const n of nodes) {
+          const numericId = String(n.id).split("/").pop() || "";
+          const val = n?.metafield?.value;
+          if (numericId && val) colorById.set(numericId, String(val).trim());
+        }
+      }
+    } catch (e) {
+      console.error("[products] color metafield fetch failed:", e);
+      // Non-fatal — products still render without color label.
+    }
+
     const products = (data.products as ShopifyProduct[])
       // Stable order: sort by product id ascending (= creation order).
       // New products always append to the end, existing ones never shift.
@@ -82,6 +116,7 @@ export async function GET() {
           priceMax: maxPrice,
           lot,
           badge,
+          color: colorById.get(String(p.id)) || undefined,
           image: p.images[0]?.src || "",
           images: p.images.map((img) => img.src),
           variants,

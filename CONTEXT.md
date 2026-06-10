@@ -71,6 +71,7 @@ UNIT-01 = ร้านขายเสื้อสตรีทแวร์ ขา
 - S: 49982772248813 · M: 49982772281581 · L: 49982772314349
 
 - สินค้ามี metafield **SIZECHART** (รูป size guide) — ใช้ส่งตอน Change size
+- **สีสินค้า:** metafield `custom.color_line` (ชื่อโชว์ "Color (LINE)", single line text) — กรอกต่อสินค้า เช่น `BLACK` → หน้า Cart แสดง `SIZE x · COLOR` (ไม่กรอก = โชว์แค่ SIZE). `/api/products` ดึงผ่าน GraphQL 1 request รวม. **หมายเหตุ:** token อ่าน metaobject ไม่ได้ (ขาด read_metaobjects) จึงใช้ `custom.color_line` ข้อความธรรมดาแทน `shopify.color-pattern`
 
 ---
 
