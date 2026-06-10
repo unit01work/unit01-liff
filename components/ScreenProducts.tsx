@@ -37,6 +37,7 @@ export function ScreenProducts({
   onGoCart: () => void;
 }) {
   const [sel, setSel] = useState<Record<string, string | null>>({});
+  const [imgIdx, setImgIdx] = useState<Record<string, number>>({});
   const [toast, setToast] = useState<string | null>(null);
   const cc = cart.reduce((s, c) => s + c.qty, 0);
 
@@ -162,6 +163,8 @@ export function ScreenProducts({
           const canAdd = sv && variant && variant.stock > 0;
           const soldOut = allSoldOut(p);
           const price = activePrice(p);
+          const imgs = p.images?.length ? p.images : p.image ? [p.image] : [];
+          const curImg = imgIdx[p.id] ?? 0;
           return (
             <div key={p.id}>
               {/* SECTION HEADER — barcode stamp + index counter */}
@@ -185,58 +188,117 @@ export function ScreenProducts({
                 </div>
               </div>
 
-              {/* Image */}
-              <div
-                style={{
-                  margin: "4px 16px 0",
-                  position: "relative",
-                  aspectRatio: "4/5",
-                  background: C.cream,
-                  overflow: "hidden",
-                }}
-              >
-                <Image
-                  src={p.image}
-                  alt={p.name}
-                  fill
-                  sizes="(max-width: 430px) calc(100vw - 32px), 398px"
-                  style={{ objectFit: "cover" }}
-                  priority={idx === 0}
-                />
-                {p.lot && (
-                  <span
+              {/* Image — swipe carousel + dots */}
+              <div style={{ margin: "4px 16px 0" }}>
+                <div
+                  style={{
+                    position: "relative",
+                    aspectRatio: "4/5",
+                    background: C.cream,
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    className="u01-carousel"
+                    onScroll={(e) => {
+                      const el = e.currentTarget;
+                      const i = el.clientWidth
+                        ? Math.round(el.scrollLeft / el.clientWidth)
+                        : 0;
+                      setImgIdx((s) => (s[p.id] === i ? s : { ...s, [p.id]: i }));
+                    }}
                     style={{
-                      position: "absolute",
-                      top: 10,
-                      left: 10,
-                      fontFamily: FM,
-                      fontSize: 9,
-                      letterSpacing: "0.14em",
-                      color: "rgba(255,255,255,0.85)",
-                      textTransform: "uppercase",
+                      display: "flex",
+                      height: "100%",
+                      overflowX: imgs.length > 1 ? "auto" : "hidden",
+                      overflowY: "hidden",
+                      scrollSnapType: "x mandatory",
+                      WebkitOverflowScrolling: "touch",
+                      scrollbarWidth: "none",
                     }}
                   >
-                    {p.lot}
-                  </span>
-                )}
-                {p.badge && (
-                  <span
+                    {imgs.map((src, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          position: "relative",
+                          flex: "0 0 100%",
+                          height: "100%",
+                          scrollSnapAlign: "start",
+                        }}
+                      >
+                        <Image
+                          src={src}
+                          alt={p.name}
+                          fill
+                          sizes="(max-width: 430px) calc(100vw - 32px), 398px"
+                          style={{ objectFit: "cover" }}
+                          priority={idx === 0 && i === 0}
+                          draggable={false}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {p.lot && (
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: 10,
+                        left: 10,
+                        fontFamily: FM,
+                        fontSize: 9,
+                        letterSpacing: "0.14em",
+                        color: "rgba(255,255,255,0.85)",
+                        textTransform: "uppercase",
+                        zIndex: 2,
+                      }}
+                    >
+                      {p.lot}
+                    </span>
+                  )}
+                  {p.badge && (
+                    <span
+                      style={{
+                        position: "absolute",
+                        top: 10,
+                        right: 10,
+                        fontFamily: FM,
+                        fontSize: 9,
+                        letterSpacing: "0.12em",
+                        padding: "3px 8px",
+                        background: C.orange,
+                        color: C.white,
+                        textTransform: "uppercase",
+                        fontWeight: 700,
+                        zIndex: 2,
+                      }}
+                    >
+                      {p.badge}
+                    </span>
+                  )}
+                </div>
+                {imgs.length > 1 && (
+                  <div
                     style={{
-                      position: "absolute",
-                      top: 10,
-                      right: 10,
-                      fontFamily: FM,
-                      fontSize: 9,
-                      letterSpacing: "0.12em",
-                      padding: "3px 8px",
-                      background: C.orange,
-                      color: C.white,
-                      textTransform: "uppercase",
-                      fontWeight: 700,
+                      display: "flex",
+                      justifyContent: "center",
+                      gap: 6,
+                      paddingTop: 10,
                     }}
                   >
-                    {p.badge}
-                  </span>
+                    {imgs.map((_, i) => (
+                      <span
+                        key={i}
+                        style={{
+                          width: 5,
+                          height: 5,
+                          borderRadius: "50%",
+                          background: curImg === i ? C.negro : C.dis,
+                          transition: "background 160ms ease",
+                        }}
+                      />
+                    ))}
+                  </div>
                 )}
               </div>
 
@@ -429,7 +491,7 @@ export function ScreenProducts({
         </div>
       </div>
       {toast && <Toast msg={`ADDED · ${toast}`} onClose={() => setToast(null)} />}
-      <style>{`@keyframes toastIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}`}</style>
+      <style>{`@keyframes toastIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}.u01-carousel::-webkit-scrollbar{display:none}`}</style>
     </>
   );
 }
