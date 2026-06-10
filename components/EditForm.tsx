@@ -5,6 +5,7 @@ import { C, FM, FT } from "@/lib/tokens";
 import { BackIcon, CheckIcon } from "./Icons";
 import { SectHead, BracketChain } from "./MicroGraphics";
 import type { ZipResult } from "@/lib/thai-zipcode";
+import { normalizePhone, normalizePostal, isValidPhone, isFormValid, getHint } from "@/lib/validation";
 
 interface EditFormProps {
   orderId: string;
@@ -183,8 +184,17 @@ export function EditForm({
     !!(initialSubDistrict && initialDistrict && initialProvince)
   );
   const [zipNotFound, setZipNotFound] = useState(false);
+  // true เมื่อรหัสไปรษณีย์ค้นเจอจริง — ออเดอร์เดิมมีที่อยู่ครบแล้วถือว่า resolved
+  const [postalResolved, setPostalResolved] = useState(
+    !!(initialSubDistrict && initialDistrict && initialProvince)
+  );
 
   const upd = useCallback((k: string, v: string) => {
+    // phone: ตัวเลขล้วน, +66/66 -> 0, สูงสุด 10 หลัก
+    if (k === "phone") v = normalizePhone(v);
+    // postal: ตัวเลขล้วน สูงสุด 5 หลัก
+    if (k === "postalCode") v = normalizePostal(v);
+
     setForm((p) => ({ ...p, [k]: v }));
     setErr((p) => (p[k] ? { ...p, [k]: false } : p));
 
@@ -204,17 +214,20 @@ export function EditForm({
             setZipNotFound(false);
             setShowDropdown(false);
             setZipResults([]);
+            setPostalResolved(true);
           } else if (results.length > 1) {
             setZipResults(results);
             setShowDropdown(true);
             setAutoFilled(false);
             setZipNotFound(false);
+            setPostalResolved(false); // รอผู้ใช้เลือกตำบล
             setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
           } else {
             setZipNotFound(true);
             setAutoFilled(false);
             setShowDropdown(false);
             setZipResults([]);
+            setPostalResolved(false);
             setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
           }
         });
@@ -224,6 +237,7 @@ export function EditForm({
         if (v.length < 5) {
           setAutoFilled(false);
           setZipNotFound(false);
+          setPostalResolved(false);
           setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
         }
       }
@@ -240,6 +254,7 @@ export function EditForm({
     setAutoFilled(true);
     setShowDropdown(false);
     setZipResults([]);
+    setPostalResolved(true);
   }, []);
 
   const validate = () => {
@@ -251,6 +266,10 @@ export function EditForm({
     required.forEach((k) => {
       if (!form[k].trim()) e[k] = true;
     });
+    // เบอร์โทร: ขึ้นต้น 0 และยาว 9 หรือ 10 หลัก
+    if (!isValidPhone(form.phone)) e.phone = true;
+    // รหัสไปรษณีย์: ต้องเป็นรหัสที่มีจริง (lookup เจอ)
+    if (!postalResolved) e.postalCode = true;
     setErr(e);
     return Object.keys(e).length === 0;
   };
@@ -303,6 +322,11 @@ export function EditForm({
 
   const isAutoReadonly = autoFilled && !zipNotFound;
 
+  // ปุ่ม disable + ข้อความเตือน (กฎกลางจาก lib/validation)
+  const formRecord = form as unknown as Record<string, string>;
+  const formValid = isFormValid(formRecord, postalResolved);
+  const hint = getHint(formRecord, postalResolved);
+
   return (
     <>
       {/* HEADER */}
@@ -336,8 +360,8 @@ export function EditForm({
             <Fld label="LAST NAME" field="lastName" ph="Last name" value={form.lastName} error={!!err.lastName} onChange={upd} />
           </div>
 
-          {/* Phone */}
-          <Fld label="PHONE NUMBER" field="phone" ph="08X-XXX-XXXX" value={form.phone} error={!!err.phone} onChange={upd} />
+          {/* Phone — no maxLen: would truncate a pasted "+66..." before normalize */}
+          <Fld label="PHONE NUMBER" field="phone" ph="08XXXXXXXX" value={form.phone} error={!!err.phone} onChange={upd} />
 
           {/* Address */}
           <Fld label="ADDRESS" field="address" ph="House no. Street Soi" area value={form.address} error={!!err.address} onChange={upd} />
@@ -381,16 +405,30 @@ export function EditForm({
             เกิดข้อผิดพลาด กรุณาลองใหม่
           </div>
         )}
+        {saveState !== "saving" && hint && (
+          <div style={{
+            fontFamily: FM, fontSize: 10, color: C.err,
+            letterSpacing: "0.1em", textTransform: "uppercase",
+            textAlign: "center",
+          }}>
+            {hint}
+          </div>
+        )}
         <button
           onClick={handleSave}
-          disabled={saveState === "saving"}
+          disabled={saveState === "saving" || !formValid}
           style={{
             width: "100%", padding: "18px 20px",
-            background: saveState === "saving" ? C.light : C.mist,
-            color: C.cream, border: "none",
+            background: saveState === "saving"
+              ? C.light
+              : formValid
+              ? "linear-gradient(90deg, #111111 0%, #111111 18%, #42272C 38%, #824E39 54%, #D28A3E 72%, #EDBA5F 88%, #F5D280 100%)"
+              : "#D9D9D8",
+            color: saveState === "saving" ? C.cream : formValid ? C.cream : C.gris,
+            border: "none",
             fontFamily: FM, fontWeight: 700, fontSize: 13,
             letterSpacing: "0.1em", textTransform: "uppercase",
-            cursor: saveState === "saving" ? "default" : "pointer",
+            cursor: saveState === "saving" ? "default" : formValid ? "pointer" : "not-allowed",
             borderRadius: 0,
             display: "flex",
             justifyContent: "center",

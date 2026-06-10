@@ -6,6 +6,7 @@ import { BackIcon } from "./Icons";
 import { SectHead, BracketChain } from "./MicroGraphics";
 import type { CartItem } from "./Cart";
 import type { ZipResult } from "@/lib/thai-zipcode";
+import { normalizePhone, normalizePostal, isValidPhone, isFormValid, getHint } from "@/lib/validation";
 
 export interface ShippingInfo {
   firstName: string;
@@ -173,9 +174,16 @@ export function ScreenShipping({
   const [zipNotFound, setZipNotFound] = useState(false);
   // If prefill has address data, mark as customer-prefilled (editable, not zip-locked)
   const [customerPrefilled] = useState(!!(prefill && prefill.firstName));
+  // true เมื่อรหัสไปรษณีย์ค้นเจอจริง (กันรหัสมั่ว/พิมพ์เอง)
+  const [postalResolved, setPostalResolved] = useState(!!(prefill && prefill.firstName));
   const sub = cart.reduce((s, c) => s + c.price * c.qty, 0);
 
   const upd = useCallback((k: string, v: string) => {
+    // phone: ตัวเลขล้วน, +66/66 -> 0, สูงสุด 10 หลัก (เก็บ 0 นำหน้า)
+    if (k === "phone") v = normalizePhone(v);
+    // postal: ตัวเลขล้วน สูงสุด 5 หลัก
+    if (k === "postalCode") v = normalizePostal(v);
+
     setForm((p) => ({ ...p, [k]: v }));
     setErr((p) => (p[k] ? { ...p, [k]: false } : p));
 
@@ -197,12 +205,14 @@ export function ScreenShipping({
             setZipNotFound(false);
             setShowDropdown(false);
             setZipResults([]);
+            setPostalResolved(true);
           } else if (results.length > 1) {
             // Multiple results — show dropdown
             setZipResults(results);
             setShowDropdown(true);
             setAutoFilled(false);
             setZipNotFound(false);
+            setPostalResolved(false); // รอผู้ใช้เลือกตำบล
             // Clear previous values
             setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
           } else {
@@ -211,6 +221,7 @@ export function ScreenShipping({
             setAutoFilled(false);
             setShowDropdown(false);
             setZipResults([]);
+            setPostalResolved(false);
             setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
           }
         });
@@ -221,6 +232,7 @@ export function ScreenShipping({
         if (v.length < 5) {
           setAutoFilled(false);
           setZipNotFound(false);
+          setPostalResolved(false);
           setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
         }
       }
@@ -237,6 +249,7 @@ export function ScreenShipping({
     setAutoFilled(true);
     setShowDropdown(false);
     setZipResults([]);
+    setPostalResolved(true);
   }, []);
 
   const validate = () => {
@@ -248,6 +261,10 @@ export function ScreenShipping({
     required.forEach((k) => {
       if (!form[k].trim()) e[k] = true;
     });
+    // เบอร์โทร: ขึ้นต้น 0 และยาว 9 หรือ 10 หลัก
+    if (!isValidPhone(form.phone)) e.phone = true;
+    // รหัสไปรษณีย์: ต้องเป็นรหัสที่มีจริง (lookup เจอ)
+    if (!postalResolved) e.postalCode = true;
     setErr(e);
     return !Object.keys(e).length;
   };
@@ -258,6 +275,11 @@ export function ScreenShipping({
 
   // Zip-based auto-fill locks fields UNLESS data came from returning customer prefill
   const isAutoReadonly = autoFilled && !zipNotFound && !customerPrefilled;
+
+  // ปุ่ม disable + ข้อความเตือน (กฎกลางจาก lib/validation)
+  const formRecord = form as unknown as Record<string, string>;
+  const formValid = isFormValid(formRecord, postalResolved);
+  const hint = getHint(formRecord, postalResolved);
 
   return (
     <>
@@ -364,7 +386,9 @@ export function ScreenShipping({
           </div>
 
           {/* Phone */}
-          <Fld label="PHONE NUMBER" field="phone" ph="08X-XXX-XXXX" value={form.phone} error={!!err.phone} onChange={upd} />
+          {/* No maxLen here: it would truncate a pasted "+66..." BEFORE normalize.
+              normalizePhone() already caps the result to 10 digits. */}
+          <Fld label="PHONE NUMBER" field="phone" ph="08XXXXXXXX" value={form.phone} error={!!err.phone} onChange={upd} />
 
           {/* Address */}
           <Fld label="ADDRESS" field="address" ph="House no. Street Soi" area value={form.address} error={!!err.address} onChange={upd} />
@@ -421,20 +445,32 @@ export function ScreenShipping({
           zIndex: 20,
         }}
       >
+        {hint && (
+          <div style={{
+            fontFamily: FM, fontSize: 10, color: C.err,
+            letterSpacing: "0.1em", textTransform: "uppercase",
+            textAlign: "center", marginBottom: 8,
+          }}>
+            {hint}
+          </div>
+        )}
         <button
           onClick={submit}
+          disabled={!formValid}
           style={{
             width: "100%",
             padding: "18px 20px",
-            background: C.mist,
-            color: C.cream,
+            background: formValid
+              ? "linear-gradient(90deg, #111111 0%, #111111 18%, #42272C 38%, #824E39 54%, #D28A3E 72%, #EDBA5F 88%, #F5D280 100%)"
+              : "#D9D9D8",
+            color: formValid ? C.cream : C.gris,
             border: "none",
             fontFamily: FM,
             fontWeight: 700,
             fontSize: 13,
             letterSpacing: "0.1em",
             textTransform: "uppercase",
-            cursor: "pointer",
+            cursor: formValid ? "pointer" : "not-allowed",
             borderRadius: 0,
             display: "flex",
             alignItems: "center",

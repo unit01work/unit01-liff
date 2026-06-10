@@ -5,9 +5,13 @@ import Image from "next/image";
 import { C, FM, fmt } from "@/lib/tokens";
 import type { Product, Variant } from "@/lib/products";
 import { CartIcon, CloseIcon } from "./Icons";
-import { BracketChain, SectHead, MicroDiv, PageStamp } from "./MicroGraphics";
+import { MicroDiv, PageStamp } from "./MicroGraphics";
 import { SizeBtn } from "./SizeSelector";
 import { Toast } from "./Toast";
+
+// stops สำหรับ gradient ปุ่ม (ดำ → น้ำตาล → ส้ม → เหลือง)
+const WARM_STOPS =
+  "#111111 0%, #111111 18%, #42272C 38%, #824E39 54%, #D28A3E 72%, #EDBA5F 88%, #F5D280 100%";
 
 interface CartItem {
   cartId: string;
@@ -113,17 +117,16 @@ export function ScreenProducts({
           style={{
             width: 48,
             height: 48,
-            background: "rgba(244,239,236,0.92)",
-            backdropFilter: "blur(12px)",
-            border: `1px solid ${C.bdr}`,
+            background: `linear-gradient(180deg, ${WARM_STOPS})`,
+            border: "none",
             cursor: "pointer",
             padding: 0,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            color: C.negro,
+            color: C.white,
             borderRadius: 4,
-            boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.16)",
           }}
         >
           <CartIcon size={24} />
@@ -161,17 +164,25 @@ export function ScreenProducts({
           const price = activePrice(p);
           return (
             <div key={p.id}>
-              <SectHead num={String(idx + 1).padStart(2, "0")} label="PRODUCT" />
-              <div style={{ borderBottom: `1.5px dotted ${C.dis}`, margin: "0 16px" }} />
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "center",
-                  padding: "12px 16px 4px",
-                  color: C.gris,
-                }}
-              >
-                <BracketChain count={11} size={9} gap={3} color={C.gris} />
+              {/* SECTION HEADER — barcode stamp + index counter */}
+              <div style={{ padding: "14px 16px 4px" }}>
+                <PageStamp color={C.gris} />
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginTop: 12,
+                    fontFamily: FM,
+                    fontSize: 10,
+                    letterSpacing: "0.12em",
+                    textTransform: "uppercase",
+                    color: C.gris,
+                  }}
+                >
+                  <span>{`[ ${String(idx + 1).padStart(3, "0")}/${String(idx + 1).padStart(3, "0")} ]`}</span>
+                  <span style={{ fontWeight: 700, letterSpacing: "0.04em" }}>{">>>>"}</span>
+                </div>
               </div>
 
               {/* Image */}
@@ -272,15 +283,43 @@ export function ScreenProducts({
 
               <div
                 style={{
-                  fontFamily: FM,
-                  fontSize: 9,
-                  letterSpacing: "0.16em",
-                  textTransform: "uppercase",
-                  color: C.gris,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-end",
                   padding: "14px 16px 8px",
                 }}
               >
-                {"// SELECT SIZE"}
+                <span
+                  style={{
+                    fontFamily: FM,
+                    fontSize: 9,
+                    letterSpacing: "0.16em",
+                    textTransform: "uppercase",
+                    color: C.gris,
+                  }}
+                >
+                  {"// SELECT SIZE"}
+                </span>
+                {p.sizeGuideUrl && (
+                  <a
+                    href={p.sizeGuideUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      fontFamily: FM,
+                      fontSize: 9,
+                      letterSpacing: "0.12em",
+                      textTransform: "uppercase",
+                      color: C.mist,
+                      textDecoration: "none",
+                      borderBottom: `1px solid ${C.mist}`,
+                      paddingBottom: 1,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    SIZE GUIDE ↗
+                  </a>
+                )}
               </div>
 
               {/* Size buttons — dynamic columns based on variant count */}
@@ -289,7 +328,7 @@ export function ScreenProducts({
                   display: "grid",
                   gridTemplateColumns: `repeat(${Math.min(p.variants.length, 4)},1fr)`,
                   gap: 6,
-                  padding: "0 16px 14px",
+                  padding: "0 16px 26px",
                 }}
               >
                 {p.variants.map((v) => (
@@ -332,7 +371,9 @@ export function ScreenProducts({
                     style={{
                       width: "100%",
                       padding: "14px 18px",
-                      background: canAdd ? C.mist : C.light,
+                      background: canAdd
+                        ? `linear-gradient(90deg, ${WARM_STOPS})`
+                        : C.idle,
                       color: canAdd ? C.cream : C.gris,
                       border: "none",
                       fontFamily: FM,

@@ -17,4 +17,7 @@ export interface Product {
   image: string;
   images: string[];
   variants: Variant[];
+  // Optional per-product size guide URL (from Shopify metafield).
+  // Not yet wired in the API — link auto-hides while undefined.
+  sizeGuideUrl?: string;
 }
