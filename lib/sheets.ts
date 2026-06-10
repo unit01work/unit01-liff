@@ -26,6 +26,7 @@ export interface OrderRow {
   "Shopify Order ID": string;
   "Size Changed": string;
   "Address Changed": string;
+  "Sync Status"?: string;
 }
 
 function getPrivateKey(): string {
@@ -74,6 +75,7 @@ const HEADERS = [
   "Sub-district", "District", "Province", "Postal Code",
   "Updated At", "Transaction Ref", "Paid At",
   "Variant IDs", "Shopify Order ID", "Size Changed", "Address Changed",
+  "Sync Status",
 ];
 
 async function getOrCreateSheet(doc: GoogleSpreadsheet) {
@@ -190,6 +192,7 @@ export async function getOrder(orderId: string): Promise<OrderRow | null> {
     "Shopify Order ID": row.get("Shopify Order ID") || "",
     "Size Changed": row.get("Size Changed") || "",
     "Address Changed": row.get("Address Changed") || "",
+    "Sync Status": row.get("Sync Status") || "",
   };
 }
 
@@ -514,6 +517,39 @@ export async function updateShopifyOrderId(
   if (!row) return false;
 
   row.set("Shopify Order ID", shopifyOrderId);
+  row.set("Updated At", nowBKK());
+  await row.save();
+  return true;
+}
+
+/**
+ * Write a sync status into the "Sync Status" column WITHOUT touching the real
+ * Shopify Order ID. Used when a post-payment edit (change size / edit shipping)
+ * fails to sync to Shopify — so the failure is visible in the sheet and never
+ * silent. Pass an empty string to clear it on a later success.
+ *
+ * The "Sync Status" column may not exist on older sheets; we add it to the
+ * header row on demand (existing data rows are unaffected).
+ */
+export async function setOrderSyncStatus(
+  orderId: string,
+  status: string
+): Promise<boolean> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = doc.sheetsByTitle["Orders"];
+  if (!sheet) return false;
+  try { await sheet.loadHeaderRow(); } catch { return false; }
+
+  if (!sheet.headerValues.includes("Sync Status")) {
+    await sheet.setHeaderRow([...sheet.headerValues, "Sync Status"]);
+  }
+
+  const rows = await sheet.getRows();
+  const row = rows.find((r) => matchOrderId(r.get("Order ID") || "", orderId));
+  if (!row) return false;
+
+  row.set("Sync Status", status.slice(0, 250));
   row.set("Updated At", nowBKK());
   await row.save();
   return true;

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getOrder, updateOrderShipping, updateOrderFull } from "@/lib/sheets";
+import { getOrder, updateOrderShipping, updateOrderFull, setOrderSyncStatus } from "@/lib/sheets";
 import { getLineClient } from "@/lib/line";
 import { buildOrderFlex } from "@/lib/flex-order";
 import { getOrderAmount, saveOrder } from "@/lib/order-store";
 import { updateShopifyShippingAddress } from "@/lib/shopify";
+import { alertOwnerEditFailed } from "@/lib/order-sync";
 
 const LIFF_URL = "https://liff.line.me/2010192572-jfj8ev6c";
 const BASE_URL = "https://unit01-liff.vercel.app";
@@ -175,11 +176,14 @@ export async function PUT(
           messages: [{ type: "text", text: confirmText }],
         });
 
-        // Update Shopify for PAID orders
+        // Update Shopify for PAID orders. The sheet is already updated — if
+        // Shopify fails we must NOT stay silent (sheet/Shopify would diverge).
         console.log("[PUT] isPaid:", isPaid, "Shopify Order ID:", order["Shopify Order ID"] || "NONE");
         if (isPaid && order["Shopify Order ID"]) {
+          let synced = false;
+          let reason = "";
           try {
-            await updateShopifyShippingAddress(order["Shopify Order ID"], {
+            synced = await updateShopifyShippingAddress(order["Shopify Order ID"], {
               firstName: body.firstName,
               lastName: body.lastName,
               address1: body.address,
@@ -189,9 +193,25 @@ export async function PUT(
               zip: body.postalCode,
               phone: body.phone,
             });
+            if (!synced) reason = "Shopify orderUpdate returned errors (see logs)";
           } catch (shopifyErr) {
-            console.error("Shopify shipping update failed:", shopifyErr);
+            reason = shopifyErr instanceof Error ? shopifyErr.message : String(shopifyErr);
+            console.error("Shopify shipping update failed:", reason);
           }
+          if (synced) {
+            await setOrderSyncStatus(orderId, "").catch(() => {});
+          } else {
+            console.error("[PUT] Shipping sync FAILED (not silent):", orderId, reason);
+            await setOrderSyncStatus(orderId, `FAILED shipping→Shopify: ${reason}`).catch((e) =>
+              console.error("[PUT] could not flag sync status:", e)
+            );
+            await alertOwnerEditFailed(orderId, order, "shipping", reason);
+          }
+        } else if (isPaid) {
+          // Paid order with no Shopify Order ID — original sync never happened.
+          console.error("[PUT] Shipping edit but no Shopify Order ID:", orderId);
+          await setOrderSyncStatus(orderId, "FAILED shipping→Shopify: no Shopify Order ID").catch(() => {});
+          await alertOwnerEditFailed(orderId, order, "shipping", "No Shopify Order ID on order row");
         }
       } catch (lineErr) {
         console.error("Reply failed:", lineErr);
