@@ -234,7 +234,9 @@ export function ScreenProducts({
                           alt={p.name}
                           fill
                           sizes="(max-width: 430px) calc(100vw - 32px), 398px"
-                          style={{ objectFit: "cover" }}
+                          // contain (not cover) so the whole garment shows —
+                          // collar/hem never get cropped, any aspect ratio fits.
+                          style={{ objectFit: "contain" }}
                           priority={idx === 0 && i === 0}
                           draggable={false}
                         />
