@@ -112,6 +112,13 @@ Date, Type (RESERVED/SOLD/RETURNED/RESTOCK), Product, Size, Variant ID, Change, 
 - **ไม่มี emoji** ในข้อความยืนยัน
 - ยืนยันแล้วเติม `[ Confirmed ]` ต่อท้ายหัวข้อ
 - LINE Flex รองรับแค่ฟอนต์ sans-serif/serif/monospace (Magda Clean Mono ใช้ใน Flex ไม่ได้)
+- **ปุ่มหลัก (Add to cart / Confirm / Save):** gradient อุ่น ดำ→น้ำตาล→ส้ม→เหลือง เมื่อ active, สีเทา idle `#D9D9D8` เมื่อยังกรอกไม่ครบ/ปิดใช้งาน
+- **หัว section สินค้า:** บาร์โค้ดสแตมป์ (`PageStamp`) + เลขลำดับ `[ 00N/00N ]` + `>>>>` (ไม่ใช้ `SectHead`/`BracketChain` แล้ว)
+
+## Validation (กลาง — `lib/validation.ts`)
+- ใช้ร่วมกันทั้ง Checkout (`ShippingForm.tsx`) และ Edit/Reorder (`EditForm.tsx`) — กฎเดียว ที่เดียว
+- `normalizePhone` (ตัวเลขล้วน, +66/66→0, สูงสุด 10 หลัก — **ห้ามใส่ maxLength ที่ input phone** ไม่งั้น paste `+66...` จะตัดเลขหาย), `normalizePostal` (5 หลัก), `isValidPhone`, `isFormValid`, `getHint`
+- ปุ่ม Confirm/Save จะ disabled จนกว่า `isFormValid` ผ่าน (ครบทุกฟิลด์ + เบอร์ถูก + รหัสไปรษณีย์ lookup เจอจริง = `postalResolved`)
 
 ---
 
@@ -124,7 +131,7 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 ---
 
 ## สถานะระบบ (อัพเดทล่าสุด)
-**เสร็จแล้ว:** LIFF shop ดึง Shopify, order→Sheets, returning customer auto-fill, Flex+QR, SlipOK→PAID, Shopify Order auto-create, Thai zip auto-fill, Contact Us ครบ, lock system, pre-order/reorder flow, auto-cancel 5 นาที (cron-job.org), backup folder, GitHub auto-deploy, **Stock + Stock Log tabs**
+**เสร็จแล้ว:** LIFF shop ดึง Shopify, order→Sheets, returning customer auto-fill, Flex+QR, SlipOK→PAID, Shopify Order auto-create, Thai zip auto-fill, Contact Us ครบ, lock system, pre-order/reorder flow, auto-cancel 5 นาที (cron-job.org), backup folder, GitHub auto-deploy, **Stock + Stock Log tabs**, **UI patch รอบ 1-3 (Products/Checkout/Edit) + หัวสินค้าบาร์โค้ดสแตมป์**
 **กำลังทำ:** —
 **รอทำ:** Finance/REVENUE เชื่อม, Platform Fee, ต้นทุน/กำไร, Admin Dashboard, Custom Domain, Rich Menu เต็มรูปแบบ
 
