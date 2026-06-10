@@ -62,6 +62,8 @@ UNIT-01 = ร้านขายเสื้อสตรีทแวร์ ขา
 - **ลำดับสินค้า:** sort ตาม product id ascending (= ลำดับการสร้าง) ทุกจุดที่ดึงสินค้า (หน้า LIFF + Stock tab + change-size lookups) → ของเก่าคงที่ ของใหม่ต่อท้ายเสมอ ไม่แทรกกลาง (Shopify REST `/products.json` default order ไม่นิ่ง)
 - **สำคัญ:** order ที่สร้างต้องเก็บ Real Order ID (order_id) ไม่ใช่ Draft ID — ออเดอร์เก่าก่อนแก้บัคนี้จะอัพเดทที่อยู่ใน Shopify ไม่ได้
 - แก้ที่อยู่ Shopify: ใช้ GraphQL `orderUpdate` ส่ง `provinceCode` (ISO 3166-2:TH เช่น TH-10, TH-41) ไม่ใช่ `province`
+- **เบอร์โทร (E.164 +66):** Shopify เริ่ม reject เบอร์ไทยแบบ local (`0xxxxxxxxx`) ใน shipping_address → 422 "Phone number invalid" ทำให้ออเดอร์จ่ายแล้วแต่ไม่ถูกสร้างใน Shopify. แก้: `toE164ThaiPhone` ใน `lib/shopify.ts` normalize เป็น `+66xxxxxxxxx` (รองรับ `0xxx`, `66xxx`, `+66xxx`, มีขีด/เว้นวรรค). normalize ไม่ได้ → **ไม่ใส่เบอร์ในที่อยู่** + แปะเบอร์ดิบใน note (`Phone(raw): ...`) เพื่อไม่ให้ทั้งออเดอร์ถูก reject
+- **ไม่ swallow error อีกต่อไป (`lib/order-sync.ts`):** หลังจ่ายเงิน webhook เรียก `syncPaidOrderToShopify` → สร้าง Shopify order แบบ retry 3 ครั้ง (delay 600ms). ถ้ายังพังทุกครั้ง → เขียน `FAILED: <reason>` ลงคอลัมน์ Shopify Order ID ใน Sheet **และ** push LINE แจ้งเจ้าของร้าน (`OWNER_LINE_USER_ID`, override ได้ด้วย env) → ออเดอร์ที่จ่ายแล้วจะไม่หายเงียบ ๆ อีก
 
 ### สินค้า (Variant IDs)
 **01 Training Oversize Tee** (PROTOTYPE-01 TEE) ฿1,800

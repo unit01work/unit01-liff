@@ -7,7 +7,6 @@ import {
   checkDuplicateTransRef,
   updateOrderStatus,
   getOrder,
-  updateShopifyOrderId,
   updateOrderSize,
   findLatestOrderByUser,
   findActiveOrders,
@@ -15,13 +14,16 @@ import {
   logOrderStockMovement,
 } from "@/lib/sheets";
 import {
-  createShopifyDraftOrder,
   getShopifyOrderStatus,
   getProductVariants,
   getProductSizeChart,
   isOrderUnfulfilled,
   updateShopifyOrderVariant,
 } from "@/lib/shopify";
+import {
+  syncPaidOrderToShopify,
+  alertOwnerOrderFailed,
+} from "@/lib/order-sync";
 import {
   buildContactFlex,
   buildChangeSizeFlex,
@@ -165,21 +167,19 @@ async function handleSlipImage(
     // Stock Log: SOLD (reserved stock is now a confirmed sale — no extra deduction)
     await logOrderStockMovement(order, "SOLD", 0, "จ่ายเงินแล้ว ขายสำเร็จ");
 
-    // 7. Create Shopify Draft Order
-    try {
-      const freshOrder = await getOrder(orderId);
-      if (freshOrder && freshOrder["Variant IDs"]) {
-        const shopifyOrder = await createShopifyDraftOrder(freshOrder);
-        // Use the real order_id (from completed draft), fallback to draft id
-        const realOrderId = shopifyOrder.order_id || shopifyOrder.id;
-        await updateShopifyOrderId(orderId, String(realOrderId));
-        console.log("[slip] Shopify Order created:", realOrderId);
-      } else {
-        console.log("[slip] No variant IDs, skipping Shopify Draft Order");
-      }
-    } catch (shopifyErr) {
-      console.error("[slip] Shopify Draft Order failed:", shopifyErr);
-      // Don't block payment confirmation if Shopify fails
+    // 7. Create Shopify Order (with retry + owner alert on failure).
+    //    Runs after the customer confirmation is prepared so payment is never
+    //    blocked, but a failure is no longer silent — see syncPaidOrderToShopify.
+    const freshOrder = await getOrder(orderId);
+    if (freshOrder && freshOrder["Variant IDs"]) {
+      await syncPaidOrderToShopify(orderId, freshOrder);
+    } else {
+      console.error("[slip] No variant IDs — cannot create Shopify order:", orderId);
+      await alertOwnerOrderFailed(
+        orderId,
+        freshOrder || { "Order ID": orderId },
+        "No variant IDs on order row"
+      );
     }
 
     // 8. Return confirmation
