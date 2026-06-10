@@ -332,43 +332,8 @@ export function ScreenShipping({
 
       {/* SCROLLABLE */}
       <div style={{ flex: 1, overflowY: "auto", background: C.cream }}>
-        <div
-          style={{
-            padding: "10px 16px 0",
-            fontFamily: FM,
-            fontSize: 9,
-            letterSpacing: "0.14em",
-            textTransform: "uppercase",
-            color: C.gris,
-          }}
-        >
-          {"// STEP 03 / 03"}
-        </div>
-
         <SectHead num="03" label="SHIPPING DETAILS" />
         <div style={{ borderBottom: `1.5px dotted ${C.dis}`, margin: "0 16px" }} />
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            padding: "8px 16px 0",
-            color: C.gris,
-          }}
-        >
-          <BracketChain count={11} size={9} gap={3} color={C.gris} />
-        </div>
-        <div
-          style={{
-            padding: "4px 16px 0",
-            fontFamily: FM,
-            fontSize: 9,
-            letterSpacing: "0.14em",
-            textTransform: "uppercase",
-            color: C.gris,
-          }}
-        >
-          {"// STEP 03 / 03 — DELIVERY ADDRESS"}
-        </div>
 
         {/* Form fields */}
         <div
