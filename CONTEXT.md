@@ -72,7 +72,8 @@ UNIT-01 = ร้านขายเสื้อสตรีทแวร์ ขา
 
 - สินค้ามี metafield **SIZECHART** (รูป size guide) — ใช้ส่งตอน Change size
 - **สีสินค้า:** metafield `custom.color_line` (ชื่อโชว์ "Color (LINE)", single line text) — กรอกต่อสินค้า เช่น `BLACK` → หน้า Cart แสดง `SIZE x · COLOR` (ไม่กรอก = โชว์แค่ SIZE). `/api/products` ดึงผ่าน GraphQL 1 request รวม. **หมายเหตุ:** token อ่าน metaobject ไม่ได้ (ขาด read_metaobjects) จึงใช้ `custom.color_line` ข้อความธรรมดาแทน `shopify.color-pattern`
-- **รูปสินค้าหลายรูป (carousel):** `/api/products` คืน `images: string[]` (ทุกรูปใน Media ของสินค้า) → หน้า Products เลื่อนรูปได้ (swipe + จุดบอกตำแหน่ง). สินค้ารูปเดียวแสดงปกติ. เพิ่ม/ลบ/สลับลำดับรูปได้ที่แท็บ Media — ไม่ต้อง deploy
+- **รูปสินค้าหลายรูป (carousel):** `/api/products` คืน `images: string[]` (ทุกรูปใน Media ของสินค้า) → หน้า Products เลื่อนรูปได้ (swipe + จุดบอกตำแหน่ง). สินค้ารูปเดียวแสดงปกติ. เพิ่ม/ลบ/สลับลำดับรูปได้ที่แท็บ Media — ไม่ต้อง deploy. รูปใช้ `object-fit: contain` (พื้นขาว) → เห็นเสื้อเต็มตัว คอ/ชายไม่โดน crop รองรับทุกอัตราส่วน
+- **ลำดับ Size (S→M→L→XL):** Shopify ส่ง variant มาไม่เรียงตามขนาด → ใช้ helper กลาง `compareSizes` ใน `lib/products.ts` (ลำดับ `XS→S→M→L→XL→XXL→XXXL`, normalize `2XL/3XL`, size แปลก/ตัวเลขไปท้ายสุด). ใช้ทั้งปุ่ม size หน้า LIFF (`/api/products`) และ tab Stock (`lib/shopify.ts` → `getAllVariantsWithStock`) → เรียงตรงกันเสมอ. ลำดับ product ยังเรียงตาม id เดิม
 - **Size Guide (หน้า Products):** metafield `custom.sizechart` (file_reference → รูป) → `/api/products` resolve เป็น CDN URL ใส่ `sizeGuideUrl` (รวมใน GraphQL request เดียวกับ color). ปุ่ม `SIZE GUIDE ↗` ขึ้นเฉพาะสินค้าที่ตั้ง metafield (ไม่ตั้ง = ซ่อนอัตโนมัติ). กดแล้วเปิด **modal รูปลอยในหน้าเดิม** (พื้นหลังมืด, ปุ่ม × / แตะนอกรูปเพื่อปิด) — ไม่เด้งแท็บใหม่. เปลี่ยนรูปใน Shopify ได้เลย ไม่ต้อง deploy
 
 ---
@@ -134,7 +135,7 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 ---
 
 ## สถานะระบบ (อัพเดทล่าสุด)
-**เสร็จแล้ว:** LIFF shop ดึง Shopify, order→Sheets, returning customer auto-fill, Flex+QR, SlipOK→PAID, Shopify Order auto-create, Thai zip auto-fill, Contact Us ครบ, lock system, pre-order/reorder flow, auto-cancel 5 นาที (cron-job.org), backup folder, GitHub auto-deploy, **Stock + Stock Log tabs**, **UI patch รอบ 1-3 (Products/Checkout/Edit) + หัวสินค้าบาร์โค้ดสแตมป์ + Patch 03 (Cart UI: ปุ่ม gradient/เทา, ลบ IMAGE/LOT) + สีสินค้าจาก metafield `custom.color_line` + รูปสินค้าหลายรูป (carousel swipe + dots) + Size Guide จาก metafield `custom.sizechart` (เปิด modal ในหน้าเดิม)**
+**เสร็จแล้ว:** LIFF shop ดึง Shopify, order→Sheets, returning customer auto-fill, Flex+QR, SlipOK→PAID, Shopify Order auto-create, Thai zip auto-fill, Contact Us ครบ, lock system, pre-order/reorder flow, auto-cancel 5 นาที (cron-job.org), backup folder, GitHub auto-deploy, **Stock + Stock Log tabs**, **UI patch รอบ 1-3 (Products/Checkout/Edit) + หัวสินค้าบาร์โค้ดสแตมป์ + Patch 03 (Cart UI: ปุ่ม gradient/เทา, ลบ IMAGE/LOT) + สีสินค้าจาก metafield `custom.color_line` + รูปสินค้าหลายรูป (carousel swipe + dots) + Size Guide จาก metafield `custom.sizechart` (เปิด modal ในหน้าเดิม) + รูปสินค้า object-fit contain (ไม่ crop) + เรียง size S→M→L→XL (helper กลาง ใช้ทั้ง LIFF + Stock tab)**
 **กำลังทำ:** —
 **รอทำ:** Finance/REVENUE เชื่อม, Platform Fee, ต้นทุน/กำไร, Admin Dashboard, Custom Domain, Rich Menu เต็มรูปแบบ
 
