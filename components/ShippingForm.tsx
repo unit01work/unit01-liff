@@ -386,7 +386,9 @@ export function ScreenShipping({
           </div>
 
           {/* Phone */}
-          <Fld label="PHONE NUMBER" field="phone" ph="08XXXXXXXX" maxLen={10} value={form.phone} error={!!err.phone} onChange={upd} />
+          {/* No maxLen here: it would truncate a pasted "+66..." BEFORE normalize.
+              normalizePhone() already caps the result to 10 digits. */}
+          <Fld label="PHONE NUMBER" field="phone" ph="08XXXXXXXX" value={form.phone} error={!!err.phone} onChange={upd} />
 
           {/* Address */}
           <Fld label="ADDRESS" field="address" ph="House no. Street Soi" area value={form.address} error={!!err.address} onChange={upd} />
