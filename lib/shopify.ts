@@ -217,6 +217,27 @@ function parseLineItems(variantIds: string): ShopifyLineItem[] {
 }
 
 /**
+ * Normalize a Thai phone number to E.164 (+66...) for Shopify.
+ * Shopify now rejects local formats ("0xxxxxxxxx", "822691456", etc.) in the
+ * shipping address with "Phone number in shipping address is invalid".
+ * Returns null when it can't be normalized to a valid Thai number — the caller
+ * should then omit the phone (and keep the raw value in the order note) rather
+ * than fail the whole order.
+ *
+ * Handles: "0812345678", "812345678" (no leading 0), "66812345678",
+ * "+66812345678", and values with spaces / dashes / parentheses.
+ */
+export function toE164ThaiPhone(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  let digits = String(raw).replace(/\D/g, ""); // strip +, spaces, dashes, etc.
+  if (digits.startsWith("66")) digits = digits.slice(2); // drop country code
+  else if (digits.startsWith("0")) digits = digits.slice(1); // drop trunk 0
+  // Thai subscriber numbers are 9 digits (mobile + most landlines).
+  if (digits.length !== 9) return null;
+  return `+66${digits}`;
+}
+
+/**
  * Create a Shopify Draft Order from order data.
  */
 export async function createShopifyDraftOrder(
@@ -230,25 +251,36 @@ export async function createShopifyDraftOrder(
 
   const shippingFee = Number(order["Shipping Fee"]) || 0;
 
+  // Shopify requires E.164 phone format. If we can't normalize, omit the phone
+  // from the address (otherwise the whole order is rejected) and stash the raw
+  // value in the note so the shop owner can still reach the customer.
+  const rawPhone = order["Phone"] || "";
+  const e164Phone = toE164ThaiPhone(rawPhone);
+  const note =
+    `Order from LIFF - ${order["Order ID"]}` +
+    (!e164Phone && rawPhone ? ` | Phone(raw): ${rawPhone}` : "");
+
+  const shippingAddress: Record<string, string> = {
+    first_name: order["First Name"],
+    last_name: order["Last Name"],
+    address1: order["Address"],
+    address2: order["Sub-district"],
+    city: order["District"],
+    province: toShopifyProvince(order["Province"]),
+    zip: order["Postal Code"],
+    country: "TH",
+  };
+  if (e164Phone) shippingAddress.phone = e164Phone;
+
   const body = {
     draft_order: {
       line_items: lineItems,
-      shipping_address: {
-        first_name: order["First Name"],
-        last_name: order["Last Name"],
-        address1: order["Address"],
-        address2: order["Sub-district"],
-        city: order["District"],
-        province: toShopifyProvince(order["Province"]),
-        zip: order["Postal Code"],
-        country: "TH",
-        phone: order["Phone"],
-      },
+      shipping_address: shippingAddress,
       shipping_line: {
         title: "Standard Shipping",
         price: shippingFee.toFixed(2),
       },
-      note: `Order from LIFF - ${order["Order ID"]}`,
+      note,
       tags: "liff-order",
     },
   };
