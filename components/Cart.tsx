@@ -202,7 +202,7 @@ export function ScreenCart({
                 style={{
                   width: 80,
                   aspectRatio: "4/5",
-                  background: C.negro,
+                  background: C.cream,
                   overflow: "hidden",
                   position: "relative",
                 }}
@@ -212,7 +212,7 @@ export function ScreenCart({
                   alt={item.name}
                   fill
                   sizes="80px"
-                  style={{ objectFit: "cover" }}
+                  style={{ objectFit: "contain" }}
                 />
               </div>
 
