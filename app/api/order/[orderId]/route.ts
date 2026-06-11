@@ -3,7 +3,7 @@ import { getOrder, updateOrderShipping, updateOrderFull, setOrderSyncStatus } fr
 import { getLineClient } from "@/lib/line";
 import { buildOrderFlex } from "@/lib/flex-order";
 import { getOrderAmount, saveOrder } from "@/lib/order-store";
-import { updateShopifyShippingAddress } from "@/lib/shopify";
+import { updateShopifyShippingAddress, getShopifyOrderSnapshot } from "@/lib/shopify";
 import { alertOwnerEditFailed } from "@/lib/order-sync";
 
 const LIFF_URL = "https://liff.line.me/2010192572-jfj8ev6c";
@@ -197,6 +197,31 @@ export async function PUT(
           } catch (shopifyErr) {
             reason = shopifyErr instanceof Error ? shopifyErr.message : String(shopifyErr);
             console.error("Shopify shipping update failed:", reason);
+          }
+          // Read-back verify: re-read the order and confirm the address actually
+          // landed on Shopify (address1/address2/zip), not just that the mutation
+          // returned ok. Closes any "succeeded silently but didn't persist" gap.
+          if (synced) {
+            try {
+              const snap = await getShopifyOrderSnapshot(order["Shopify Order ID"]);
+              const norm = (s: string) => (s || "").trim().replace(/\s+/g, " ").toLowerCase();
+              if (!snap.found) {
+                synced = false;
+                reason = "read-back: order not found after update";
+              } else if (
+                norm(snap.shippingAddress1 || "") !== norm(body.address) ||
+                norm(snap.shippingAddress2 || "") !== norm(body.subDistrict) ||
+                norm(snap.shippingZip || "") !== norm(body.postalCode)
+              ) {
+                synced = false;
+                reason =
+                  `read-back mismatch — Shopify addr1:"${snap.shippingAddress1}" ` +
+                  `addr2:"${snap.shippingAddress2}" zip:"${snap.shippingZip}"`;
+              }
+            } catch (vErr) {
+              synced = false;
+              reason = "read-back verify failed: " + (vErr instanceof Error ? vErr.message : String(vErr));
+            }
           }
           if (synced) {
             await setOrderSyncStatus(orderId, "").catch(() => {});

@@ -20,6 +20,7 @@ import {
   getProductSizeChart,
   isOrderUnfulfilled,
   updateShopifyOrderVariant,
+  getShopifyOrderSnapshot,
 } from "@/lib/shopify";
 import {
   syncPaidOrderToShopify,
@@ -374,6 +375,30 @@ async function handleSelectSize(orderId: string, newSize: string, newVariantId: 
     } catch (shopifyErr) {
       reason = shopifyErr instanceof Error ? shopifyErr.message : String(shopifyErr);
       console.error("[webhook] Shopify variant update failed:", reason);
+    }
+    // Read-back verify: don't trust the mutation's "ok" — re-read the order and
+    // confirm the NEW variant is actually active and the OLD one is gone. This
+    // closes any "succeeded silently but didn't land" gap.
+    if (synced) {
+      try {
+        const snap = await getShopifyOrderSnapshot(order["Shopify Order ID"]);
+        if (!snap.found) {
+          synced = false;
+          reason = "read-back: order not found after edit";
+        } else {
+          const active = snap.activeVariantIds.map(String);
+          if (!active.includes(String(newVariantId))) {
+            synced = false;
+            reason = `read-back mismatch — new variant ${newVariantId} not active (Shopify active: [${active.join(", ")}])`;
+          } else if (active.includes(String(oldVariantId))) {
+            synced = false;
+            reason = `read-back mismatch — old variant ${oldVariantId} still active (Shopify active: [${active.join(", ")}])`;
+          }
+        }
+      } catch (vErr) {
+        synced = false;
+        reason = "read-back verify failed: " + (vErr instanceof Error ? vErr.message : String(vErr));
+      }
     }
     if (synced) {
       console.log("[webhook] Shopify order variant updated:", orderId);

@@ -14,7 +14,8 @@ import { pushOwner } from "@/lib/order-sync";
  *   1. It has a real Shopify Order ID (not empty, not "FAILED…").
  *   2. The Shopify order still exists / is readable.
  *   3. The active variants on Shopify match the sheet (catches size drift).
- *   4. No leftover "Sync Status" = FAILED… marker.
+ *   4. The shipping address on Shopify matches the sheet (catches address drift).
+ *   5. No leftover "Sync Status" = FAILED… marker.
  * It also reports any missing Shopify scopes. A summary is pushed to the owner
  * on LINE every run (incl. "all clear") so the watchdog is provably alive.
  *
@@ -88,6 +89,34 @@ export async function GET(request: NextRequest) {
         issues.push({
           orderId,
           problem: `สินค้า/ไซส์ไม่ตรง — Sheet: [${sheetVariants.join(", ")}] / Shopify: [${shopifyVariants.join(", ")}]`,
+        });
+      }
+
+      // Compare shipping address (catches address-edit drift — the gap that let
+      // a post-payment address change live only in the Sheet, never in Shopify).
+      // address1 = Address, address2 = Sub-district, zip = Postal Code.
+      const norm = (s: string) =>
+        (s || "").trim().replace(/\s+/g, " ").toLowerCase();
+      const addrMismatch: string[] = [];
+      if (norm(o["Address"]) !== norm(snap.shippingAddress1 || "")) {
+        addrMismatch.push(
+          `address1 — Sheet: "${o["Address"] || ""}" / Shopify: "${snap.shippingAddress1 || ""}"`
+        );
+      }
+      if (norm(o["Sub-district"]) !== norm(snap.shippingAddress2 || "")) {
+        addrMismatch.push(
+          `address2 — Sheet: "${o["Sub-district"] || ""}" / Shopify: "${snap.shippingAddress2 || ""}"`
+        );
+      }
+      if (norm(o["Postal Code"]) !== norm(snap.shippingZip || "")) {
+        addrMismatch.push(
+          `zip — Sheet: "${o["Postal Code"] || ""}" / Shopify: "${snap.shippingZip || ""}"`
+        );
+      }
+      if (addrMismatch.length > 0) {
+        issues.push({
+          orderId,
+          problem: `ที่อยู่ไม่ตรง — ${addrMismatch.join(" | ")}`,
         });
       }
     }

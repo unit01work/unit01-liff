@@ -408,6 +408,10 @@ export interface ShopifyOrderSnapshot {
   // Variant IDs that are still active on the order (current_quantity > 0).
   activeVariantIds: string[];
   shippingPhone?: string;
+  // Current shipping address on Shopify (for Sheet ↔ Shopify drift detection).
+  shippingAddress1?: string;
+  shippingAddress2?: string;
+  shippingZip?: string;
   fulfillmentStatus?: string | null;
 }
 
@@ -436,11 +440,15 @@ export async function getShopifyOrderSnapshot(
     .map((li: any) => String(li.variant_id))
     .filter(Boolean);
 
+  const sa = order.shipping_address || {};
   return {
     found: true,
     name: order.name,
     activeVariantIds,
-    shippingPhone: order.shipping_address?.phone || "",
+    shippingPhone: sa.phone || "",
+    shippingAddress1: sa.address1 || "",
+    shippingAddress2: sa.address2 || "",
+    shippingZip: sa.zip || "",
     fulfillmentStatus: order.fulfillment_status ?? null,
   };
 }
