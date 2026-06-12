@@ -1,19 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resolveWindow, isInWindow, isCarryOver } from "@/lib/daily-pull/window";
-import { pullPaidUnfulfilledOrders } from "@/lib/daily-pull/shopify";
-import { toWorklistRow } from "@/lib/daily-pull/worklist";
-import { writeWorklistTab } from "@/lib/daily-pull/sheets";
+import { runDailyPull } from "@/lib/daily-pull/run";
 
 /**
- * UNIT-01 daily-pull worklist — STEP 2.
+ * UNIT-01 daily-pull worklist (full flow).
  *
- * Pulls every PAID + UNFULFILLED Shopify order in the current 10:00-ICT window
- * and writes it as the 11-column worklist into a per-day tab (WL-YYYY-MM-DD).
- * Carry-over stragglers are detected and returned separately (never in the tab).
- * Does NOT yet tag `worklisted` or push LINE — that lands in steps 4/5.
+ * 10:00 ICT cron -> pull every PAID + UNFULFILLED Shopify order in the window ->
+ * write the per-day worklist tab (WL-YYYY-MM-DD) -> reconcile against a fresh
+ * Shopify re-pull (auto-fix once, else flag) -> tag `worklisted` for idempotency
+ * -> alert carry-over stragglers separately -> report every step in Thai on LINE.
  *
- *   POST /api/daily-pull            (Bearer CRON_SECRET)  -> pulls + writes tab
- *   GET  /api/daily-pull?key=...&date=YYYY-MM-DD&dry=1     -> pull only, no write
+ *   POST /api/daily-pull               (Bearer CRON_SECRET)  full run
+ *   GET  /api/daily-pull?key=...
+ *     &date=YYYY-MM-DD   manual re-run for a specific round (regenerates the tab)
+ *     &dry=1             skip tagging real orders (testing)
+ *     &silent=1          collect LINE messages in the response, don't push them
  */
 function authorized(request: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -28,46 +28,21 @@ async function handle(request: NextRequest) {
   if (!authorized(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-
-  const dateParam = request.nextUrl.searchParams.get("date");
-  const dry = request.nextUrl.searchParams.get("dry") === "1";
-  const isRegen = Boolean(dateParam);
-  const w = resolveWindow(dateParam);
-
-  const pulled = await pullPaidUnfulfilledOrders({
-    rangeStartUtc: w.startUtc,
-    rangeEndUtc: w.endUtc,
-    excludeWorklisted: !isRegen,
-  });
-
-  const inWindow = pulled.filter((o) => isInWindow(new Date(o.paidAt), w));
-  const carryOver = pulled.filter((o) => isCarryOver(new Date(o.paidAt), w));
-
-  const rows = inWindow.map(toWorklistRow);
-
-  const written = dry ? null : await writeWorklistTab(w.dateLabel, rows);
-
-  return NextResponse.json({
-    step: dry ? "2-dry-run" : "2-write",
-    window: {
-      dateLabel: w.dateLabel,
-      startUtc: w.startUtc.toISOString(),
-      endUtc: w.endUtc.toISOString(),
-      regen: isRegen,
-    },
-    counts: {
-      pulled: pulled.length,
-      inWindow: inWindow.length,
-      carryOver: carryOver.length,
-    },
-    sheet: written,
-    worklist: rows,
-    carryOver: carryOver.map((o) => ({
-      orderName: o.name,
-      paidAt: o.paidAt,
-      customer: o.customerName,
-    })),
-  });
+  const sp = request.nextUrl.searchParams;
+  try {
+    const result = await runDailyPull({
+      dateParam: sp.get("date"),
+      dry: sp.get("dry") === "1",
+      silent: sp.get("silent") === "1",
+    });
+    return NextResponse.json({ ok: true, ...result });
+  } catch (e) {
+    console.error("[daily-pull] run failed:", e);
+    return NextResponse.json(
+      { ok: false, error: e instanceof Error ? e.message : String(e) },
+      { status: 500 }
+    );
+  }
 }
 
 export async function GET(request: NextRequest) {

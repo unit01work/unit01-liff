@@ -76,6 +76,19 @@ export async function writeWorklistTab(
   };
 }
 
+// Does the day's worklist tab exist? Used by the heartbeat to tell "the 10:00
+// run never happened" apart from "it ran and had 0 orders" (an empty tab still
+// exists). Returns the row count too.
+export async function worklistTabStatus(
+  dateLabel: string
+): Promise<{ exists: boolean; rowCount: number }> {
+  const doc = await getDoc();
+  const sheet = doc.sheetsByTitle[tabTitle(dateLabel)];
+  if (!sheet) return { exists: false, rowCount: 0 };
+  const rows = await sheet.getRows();
+  return { exists: true, rowCount: rows.length };
+}
+
 // Read the worklist tab back as plain objects, for reconciliation.
 export async function readWorklistTab(
   dateLabel: string
