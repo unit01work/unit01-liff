@@ -15,6 +15,11 @@ export const C = {
   idle: "#D9D9D8",
 };
 
+// Warm button/progress gradient stops (ดำ → น้ำตาล → ส้ม → เหลือง).
+// Shared so the loading progress bar matches the primary-button gradient.
+export const WARM_STOPS =
+  "#111111 0%, #111111 18%, #42272C 38%, #824E39 54%, #D28A3E 72%, #EDBA5F 88%, #F5D280 100%";
+
 export const FM =
   '"Magda Clean Mono", ui-monospace, Menlo, Consolas, monospace';
 export const FT =

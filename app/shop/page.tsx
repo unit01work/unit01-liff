@@ -9,9 +9,10 @@ import { ScreenProducts } from "@/components/ScreenProducts";
 import { ScreenCart, type CartItem } from "@/components/Cart";
 import { ScreenShipping, type ShippingInfo } from "@/components/ShippingForm";
 import { ClosingOverlay } from "@/components/ClosingOverlay";
+import { LoadingOverlay, type OrderErrorKind } from "@/components/LoadingOverlay";
 import { EditForm } from "@/components/EditForm";
 
-type Screen = "products" | "cart" | "shipping" | "closing";
+type Screen = "products" | "cart" | "shipping" | "creating" | "closing";
 
 function ShopPageInner() {
   const searchParams = useSearchParams();
@@ -297,6 +298,8 @@ function ShopFlow() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orderNo, setOrderNo] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [orderError, setOrderError] = useState<OrderErrorKind | null>(null);
+  const lastFormRef = React.useRef<ShippingInfo | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [shippingFee, setShippingFee] = useState(50);
   const [loadingProducts, setLoadingProducts] = useState(true);
@@ -347,7 +350,12 @@ function ShopFlow() {
 
   const handleConfirm = useCallback(async (form: ShippingInfo) => {
     if (submitting) return;
+    lastFormRef.current = form;
     setSubmitting(true);
+    setOrderError(null);
+    // Show the loading overlay immediately + leave the shipping screen so the
+    // CONFIRM button can't be pressed again while the order is being created.
+    setScreen("creating");
 
     try {
       const res = await fetch("/api/order", {
@@ -360,26 +368,43 @@ function ShopFlow() {
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        alert("เกิดข้อผิดพลาด กรุณาลองใหม่");
+        // Map the route's status to a customer-facing error on the same overlay.
+        const kind: OrderErrorKind =
+          res.status === 409 ? "out_of_stock" : res.status === 503 ? "busy" : "generic";
+        setOrderError(kind);
         setSubmitting(false);
-        return;
+        return; // stay on "creating" screen, now in error mode
       }
 
       setOrderNo(data.orderId);
       setScreen("closing");
     } catch {
-      alert("เกิดข้อผิดพลาด กรุณาลองใหม่");
+      setOrderError("generic");
       setSubmitting(false);
     }
   }, [cart, profile, submitting]);
+
+  // Retry from the error overlay: out-of-stock → back to cart to adjust;
+  // busy / generic → re-submit the same shipping form.
+  const handleRetry = useCallback(() => {
+    if (orderError === "out_of_stock") {
+      setOrderError(null);
+      setScreen("cart");
+      return;
+    }
+    const form = lastFormRef.current;
+    if (form) handleConfirm(form);
+    else setScreen("shipping");
+  }, [orderError, handleConfirm]);
 
   const handleReset = useCallback(() => {
     setCart([]);
     setScreen("products");
     setOrderNo("");
     setSubmitting(false);
+    setOrderError(null);
   }, []);
 
   if (loadingProducts) {
@@ -397,6 +422,7 @@ function ShopFlow() {
       {screen === "products" && <ScreenProducts products={products} cart={cart} onAdd={addToCart} onGoCart={() => setScreen("cart")} />}
       {screen === "cart" && <ScreenCart cart={cart} shippingFee={shippingFee} onUpdateQty={updateQty} onRemove={removeItem} onBack={() => setScreen("products")} onCheckout={() => setScreen("shipping")} />}
       {screen === "shipping" && <ScreenShipping cart={cart} shippingFee={shippingFee} prefill={customerPrefill} onBack={() => setScreen("cart")} onConfirm={handleConfirm} />}
+      {screen === "creating" && <LoadingOverlay error={orderError} onRetry={handleRetry} />}
       {screen === "closing" && <ClosingOverlay orderNo={orderNo} onReset={handleReset} />}
     </>
   );
