@@ -6,7 +6,14 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "loadtest:clone": "tsx scripts/loadtest/00-clone-sheet.ts",
+    "loadtest:a": "tsx scripts/loadtest/A-sheets-concurrency.ts",
+    "loadtest:b": "tsx scripts/loadtest/B-oversell.ts",
+    "loadtest:c": "tsx scripts/loadtest/C-slip-matching.ts",
+    "loadtest:d": "tsx scripts/loadtest/D-reserved-calc.ts",
+    "loadtest:all": "tsx scripts/loadtest/A-sheets-concurrency.ts && tsx scripts/loadtest/B-oversell.ts && tsx scripts/loadtest/C-slip-matching.ts && tsx scripts/loadtest/D-reserved-calc.ts",
+    "loadtest:clean": "tsx scripts/loadtest/99-cleanup.ts"
   },
   "dependencies": {
     "@line/bot-sdk": "^11.0.0",
@@ -26,9 +33,11 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "tailwindcss": "^4",
+    "tsx": "^4.22.4",
     "typescript": "^5"
   }
 }

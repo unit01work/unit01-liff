@@ -971,3 +971,149 @@ export async function refreshStockTab(): Promise<void> {
   }
   console.log(`[sheets] refreshStockTab: wrote ${newRows.length} variant rows`);
 }
+
+/* ──────────────────────────────────────────────────────────────
+ * CONCURRENCY SAFETY — added to close two race conditions found by
+ * the load test:
+ *   1. Oversell: the order route had NO server-side stock check, so N
+ *      simultaneous buyers of a size with stock 1 all created orders.
+ *   2. Double slip claim: checkDuplicateTransRef() then updateOrderStatus()
+ *      was a read-then-write gap, so two slips with the same Transaction Ref
+ *      could both mark different orders PAID.
+ *
+ * Mitigation: a single in-process async mutex serialises every check-then-write
+ * critical section. This fully removes both races *within a single Node/Vercel
+ * instance*. Vercel can spin up multiple instances under heavy bursts, so this
+ * is not a distributed lock — but combined with the daily reconcile watchdog
+ * (which now also compares stock & flags FAILED syncs) it makes any residual
+ * cross-instance race rare AND detectable rather than silent. A hard guarantee
+ * would require an authoritative transactional store (DB or Shopify inventory
+ * reservation); documented here intentionally.
+ * ────────────────────────────────────────────────────────────── */
+
+let _lockTail: Promise<unknown> = Promise.resolve();
+/** Serialise an async critical section against all other withLock() callers. */
+export function withLock<T>(fn: () => Promise<T>): Promise<T> {
+  const result = _lockTail.then(() => fn());
+  _lockTail = result.catch(() => {});
+  return result;
+}
+
+/** variantId → Shopify Stock, read from the "Stock" tab (authoritative qty). */
+export async function getStockMap(): Promise<Record<string, number>> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = doc.sheetsByTitle["Stock"];
+  const map: Record<string, number> = {};
+  if (!sheet) return map;
+  try { await sheet.loadHeaderRow(); } catch { return map; }
+  const rows = await sheet.getRows();
+  for (const r of rows) {
+    const vid = (r.get("Variant ID") || "").trim();
+    if (!vid) continue;
+    map[vid] = Number(r.get("Shopify Stock") || 0);
+  }
+  return map;
+}
+
+/** variantId → committed units (PENDING reserved + PAID sold) from "Orders". */
+export async function getCommittedMap(): Promise<Record<string, number>> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = doc.sheetsByTitle["Orders"];
+  const map: Record<string, number> = {};
+  if (!sheet) return map;
+  try { await sheet.loadHeaderRow(); } catch { return map; }
+  const rows = await sheet.getRows();
+  for (const row of rows) {
+    const status = (row.get("Status") || "").toUpperCase();
+    if (status !== "PENDING" && status !== "PAID") continue;
+    const vids = (row.get("Variant IDs") || "") as string;
+    for (const part of vids.split(",")) {
+      const [vid, q] = part.trim().split(":");
+      if (!vid) continue;
+      map[vid] = (map[vid] || 0) + (parseInt(q, 10) || 1);
+    }
+  }
+  return map;
+}
+
+export interface ReserveLineItem {
+  name: string;
+  size: string;
+  variantId: string;
+  qty: number;
+}
+
+export interface GuardedOrderResult {
+  ok: boolean;
+  reason?: string;
+  shortVariantId?: string;
+}
+
+/**
+ * Create an order ONLY if every line item still has stock. The stock check and
+ * the row append happen inside a single locked critical section, so two
+ * simultaneous buyers can never both pass the check for the last unit.
+ */
+export async function createOrderGuarded(
+  data: Parameters<typeof appendOrder>[0],
+  lineItems: ReserveLineItem[]
+): Promise<GuardedOrderResult> {
+  return withLock(async () => {
+    const stock = await getStockMap();
+    const committed = await getCommittedMap();
+
+    // Aggregate requested qty per variant (handles dup variants in one cart).
+    const want: Record<string, number> = {};
+    for (const it of lineItems) {
+      if (!it.variantId) continue;
+      want[it.variantId] = (want[it.variantId] || 0) + it.qty;
+    }
+    for (const [vid, qty] of Object.entries(want)) {
+      const available = (stock[vid] ?? 0) - (committed[vid] ?? 0);
+      if (qty > available) {
+        return {
+          ok: false,
+          shortVariantId: vid,
+          reason: `out of stock: variant ${vid} (available ${available}, requested ${qty})`,
+        };
+      }
+    }
+
+    await appendOrder(data);
+
+    for (const it of lineItems) {
+      if (!it.variantId) continue;
+      await appendStockLog({
+        type: "RESERVED",
+        product: it.name,
+        size: it.size,
+        variantId: it.variantId,
+        change: -it.qty,
+        orderId: data.orderId,
+        note: "จองชั่วคราว (PENDING)",
+      });
+    }
+    return { ok: true };
+  });
+}
+
+/**
+ * Atomically claim a slip's Transaction Ref and mark the order PAID. The
+ * duplicate-ref check and the status write run inside one locked section, so a
+ * Transaction Ref can be used to mark at most one order PAID even under
+ * simultaneous webhook deliveries.
+ */
+export async function claimAndMarkPaid(
+  orderId: string,
+  transRef: string
+): Promise<{ ok: boolean; reason?: string }> {
+  return withLock(async () => {
+    if (transRef && (await checkDuplicateTransRef(transRef))) {
+      return { ok: false, reason: "duplicate transRef" };
+    }
+    const ok = await updateOrderStatus(orderId, "PAID", transRef);
+    return ok ? { ok: true } : { ok: false, reason: "order not found" };
+  });
+}
