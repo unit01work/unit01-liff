@@ -1,4 +1,4 @@
-import { GoogleSpreadsheet } from "google-spreadsheet";
+import { GoogleSpreadsheet, GoogleSpreadsheetWorksheet } from "google-spreadsheet";
 import { JWT } from "google-auth-library";
 import { getAllVariantsWithStock } from "./shopify";
 
@@ -81,11 +81,17 @@ function getDoc() {
 const DOC_TTL_MS = 5 * 60 * 1000;
 let _cachedDoc: GoogleSpreadsheet | null = null;
 let _cachedDocAt = 0;
+// Whether the "Stock Log" tab's header has been verified/migrated on the
+// CURRENT cached doc instance. Reset on every fresh loadInfo (TTL refresh,
+// deploy, or invalidateDocCache) so a newly added column is picked up within
+// one cache window. Lets warm orders skip a ~500ms loadHeaderRow round-trip.
+let _stockLogHeaderOK = false;
 
 /** Drop the cached workbook handle; next getReadyDoc() reloads metadata. */
 export function invalidateDocCache(): void {
   _cachedDoc = null;
   _cachedDocAt = 0;
+  _stockLogHeaderOK = false;
 }
 
 /**
@@ -102,7 +108,27 @@ async function getReadyDoc(forceFresh = false): Promise<GoogleSpreadsheet> {
   await doc.loadInfo();
   _cachedDoc = doc;
   _cachedDocAt = now;
+  // Fresh doc instance → its sheet handles haven't had headers verified yet.
+  _stockLogHeaderOK = false;
   return doc;
+}
+
+/**
+ * Get the "Stock Log" sheet, verifying/migrating its header only ONCE per
+ * cached-doc lifetime. After the first verify on a given doc instance, the
+ * sheet's headerValues are cached in memory, so addRows() maps columns
+ * correctly without re-fetching the header every order (saves ~500ms). A fresh
+ * loadInfo (TTL/deploy/invalidate) resets the flag → header re-verified, so new
+ * columns are picked up within one cache window.
+ */
+async function getStockLogSheetVerified(
+  doc: GoogleSpreadsheet
+): Promise<GoogleSpreadsheetWorksheet> {
+  const existing = doc.sheetsByTitle["Stock Log"];
+  if (existing && _stockLogHeaderOK) return existing;
+  const sheet = await getOrCreateTab(doc, "Stock Log", STOCK_LOG_HEADERS);
+  _stockLogHeaderOK = true;
+  return sheet;
 }
 
 function nowBKK(): string {
@@ -1124,11 +1150,38 @@ export async function createOrderGuarded(
     if (!doc.sheetsByTitle["Orders"] || !doc.sheetsByTitle["Stock Log"]) {
       doc = await getReadyDoc(true);
     }
-    const ordersSheet = await getOrCreateSheet(doc);
+    // Grab the Orders sheet handle WITHOUT a loadHeaderRow round-trip — the
+    // getRows() below loads the header itself. Only fall back to the full
+    // getOrCreateSheet (which creates + sets headers) in the rare case the tab
+    // is genuinely absent after the self-heal above.
+    let ordersSheet = doc.sheetsByTitle["Orders"];
+    if (!ordersSheet) ordersSheet = await getOrCreateSheet(doc);
+    const stockSheet = doc.sheetsByTitle["Stock"];
 
-    // ── committed (PENDING + PAID) per variant — single read of Orders ──
+    // ── read Orders + Stock IN PARALLEL (two independent reads) ──
+    // Orders read is unguarded: if it throws (quota/network), the rejection
+    // propagates out of withLock → createOrderGuarded throws → the route's
+    // try/catch returns 503 and NO order is created (no half-write — this runs
+    // before any addRow). Stock read is .catch-guarded so a transient failure
+    // falls back to 0 stock (→ availability fails → 409), never a dangling
+    // rejection and never a hang. So whichever one errors, the outcome is a
+    // clean status code, not a partial order.
+    const [orderRows, stockRows] = await Promise.all([
+      ordersSheet.getRows(),
+      stockSheet ? stockSheet.getRows().catch(() => null) : Promise.resolve(null),
+    ]);
+
+    // ── auto-migrate Orders columns using the header getRows() just loaded ──
+    // (no separate loadHeaderRow round-trip — saves ~500ms vs getOrCreateSheet).
+    const existingHeaders = ordersSheet.headerValues || [];
+    const missingHeaders = HEADERS.filter((h) => !existingHeaders.includes(h));
+    if (missingHeaders.length > 0) {
+      console.log("[sheets] Adding missing Orders headers:", missingHeaders);
+      await ordersSheet.setHeaderRow([...existingHeaders, ...missingHeaders]);
+    }
+
+    // ── committed (PENDING + PAID) per variant — from the live Orders read ──
     const committed: Record<string, number> = {};
-    const orderRows = await ordersSheet.getRows();
     for (const row of orderRows) {
       const status = (row.get("Status") || "").toUpperCase();
       if (status !== "PENDING" && status !== "PAID") continue;
@@ -1139,20 +1192,12 @@ export async function createOrderGuarded(
       }
     }
 
-    // ── Shopify stock per variant — single read of Stock tab ──
+    // ── Shopify stock per variant — from the live Stock read (null = 0) ──
     const stock: Record<string, number> = {};
-    const stockSheet = doc.sheetsByTitle["Stock"];
-    if (stockSheet) {
-      try {
-        // getRows() loads the header row itself — no separate loadHeaderRow()
-        // round-trip needed (saves ~500ms). On a header-less/empty Stock tab it
-        // throws, caught below → stock stays {} → treated as 0 (same fallback).
-        for (const r of await stockSheet.getRows()) {
-          const vid = (r.get("Variant ID") || "").trim();
-          if (vid) stock[vid] = Number(r.get("Shopify Stock") || 0);
-        }
-      } catch {
-        /* no Stock tab / empty — treated as 0 stock below */
+    if (stockRows) {
+      for (const r of stockRows) {
+        const vid = (r.get("Variant ID") || "").trim();
+        if (vid) stock[vid] = Number(r.get("Shopify Stock") || 0);
       }
     }
 
@@ -1179,7 +1224,9 @@ export async function createOrderGuarded(
     // ── RESERVED stock-log rows, batched into one write ──
     const reserved = lineItems.filter((it) => it.variantId);
     if (reserved.length > 0) {
-      const logSheet = await getOrCreateTab(doc, "Stock Log", STOCK_LOG_HEADERS);
+      // Header verified once per cached-doc lifetime (skips ~500ms loadHeaderRow
+      // on warm orders; re-verified after any TTL/deploy cache refresh).
+      const logSheet = await getStockLogSheetVerified(doc);
       const now = nowBKK();
       await logSheet.addRows(
         reserved.map((it) => ({
