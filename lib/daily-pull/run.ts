@@ -60,11 +60,13 @@ export async function runDailyPull(opts: RunOptions): Promise<RunResult> {
   let written = await writeWorklistTab(w.dateLabel, rows);
 
   // Reconcile via an independent re-pull of the same window vs the sheet.
+  // Must mirror the main pull's worklisted exclusion, else an already-tagged
+  // order gets re-pulled, flagged "missing", and auto-fixed back into the sheet.
   const verify = async () => {
     const fresh = await pullPaidUnfulfilledOrders({
       rangeStartUtc: w.startUtc,
       rangeEndUtc: w.endUtc,
-      excludeWorklisted: false,
+      excludeWorklisted: !isRegen,
     });
     const freshInWindow = inWindowOf(fresh);
     const sheetRows = await readWorklistTab(w.dateLabel);
