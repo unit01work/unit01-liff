@@ -2,17 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveWindow, isInWindow, isCarryOver } from "@/lib/daily-pull/window";
 import { pullPaidUnfulfilledOrders } from "@/lib/daily-pull/shopify";
 import { toWorklistRow } from "@/lib/daily-pull/worklist";
+import { writeWorklistTab } from "@/lib/daily-pull/sheets";
 
 /**
- * UNIT-01 daily-pull worklist — STEP 1 (dry-run).
+ * UNIT-01 daily-pull worklist — STEP 2.
  *
  * Pulls every PAID + UNFULFILLED Shopify order in the current 10:00-ICT window
- * and returns it as the 11-column worklist, plus any carry-over stragglers.
- * Does NOT write the sheet, tag `worklisted`, or push LINE yet — that lands in
- * later steps. Safe to run repeatedly.
+ * and writes it as the 11-column worklist into a per-day tab (WL-YYYY-MM-DD).
+ * Carry-over stragglers are detected and returned separately (never in the tab).
+ * Does NOT yet tag `worklisted` or push LINE — that lands in steps 4/5.
  *
- *   POST /api/daily-pull            (Bearer CRON_SECRET)
- *   GET  /api/daily-pull?key=...&date=YYYY-MM-DD
+ *   POST /api/daily-pull            (Bearer CRON_SECRET)  -> pulls + writes tab
+ *   GET  /api/daily-pull?key=...&date=YYYY-MM-DD&dry=1     -> pull only, no write
  */
 function authorized(request: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -29,6 +30,7 @@ async function handle(request: NextRequest) {
   }
 
   const dateParam = request.nextUrl.searchParams.get("date");
+  const dry = request.nextUrl.searchParams.get("dry") === "1";
   const isRegen = Boolean(dateParam);
   const w = resolveWindow(dateParam);
 
@@ -43,8 +45,10 @@ async function handle(request: NextRequest) {
 
   const rows = inWindow.map(toWorklistRow);
 
+  const written = dry ? null : await writeWorklistTab(w.dateLabel, rows);
+
   return NextResponse.json({
-    step: "1-dry-run",
+    step: dry ? "2-dry-run" : "2-write",
     window: {
       dateLabel: w.dateLabel,
       startUtc: w.startUtc.toISOString(),
@@ -56,6 +60,7 @@ async function handle(request: NextRequest) {
       inWindow: inWindow.length,
       carryOver: carryOver.length,
     },
+    sheet: written,
     worklist: rows,
     carryOver: carryOver.map((o) => ({
       orderName: o.name,
