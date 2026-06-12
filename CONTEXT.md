@@ -109,6 +109,7 @@ Date, Type (RESERVED/SOLD/RETURNED/RESTOCK), Product, Size, Variant ID, Change, 
 - Shopify Order สร้างหลังจ่ายเงินเท่านั้น (ไป Orders ตรงๆ ไม่ใช่ Draft)
 - สลิปจับคู่ด้วย LINE userId + ยอดเงิน (**ตรงเป๊ะ ไม่มี tolerance**), กัน transRef ซ้ำ, จับ PENDING **ใหม่สุดก่อน** (newest-first) — ทั้งหมดทำใน `claimPaymentForUser()` แบบ atomic (อ่าน-จับคู่-mark PAID ใน critical section เดียวผ่าน `withLock`)
 - Edit ที่อยู่ได้ 1 ครั้ง / Change size ได้ 1 ครั้ง (แยกอิสระ) — ใช้แล้วล็อค (Address Changed / Size Changed = YES)
+- **Edit-Lock ตามเวลา (เสร็จแล้ว — ดูหัวข้อ "Edit-Lock" ด้านล่าง):** ลูกค้าแก้ที่อยู่/ไซส์ได้ถึง **10:00 น. (ICT)** ของวัน cutoff เท่านั้น (คิดจากเวลาที่จ่าย) เลยเวลานี้ = ล็อกทุกออเดอร์ที่ "กำลังเตรียมจัดส่ง". time-lock **มาก่อน** edit-once (เลยเวลา = แก้ไม่ได้ แม้ยังไม่เคยแก้)
 - ออเดอร์จัดส่งแล้ว แก้ไม่ได้ทุกอย่าง
 - Auto-cancel: PENDING เกิน 5 นาที → EXPIRED + คืนสต็อก (cron-job.org เรียก /api/check-expired ทุก 1 นาที)
 - QR เป็น static — กันด้วยการ reject สลิปของออเดอร์ EXPIRED
@@ -142,6 +143,24 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 
 ---
 
+## Edit-Lock — เดดไลน์แก้ออเดอร์ราย order (เสร็จแล้ว — merge + ขึ้น production แล้ว 2026-06-13)
+ลูกค้าแก้ที่อยู่/ไซส์ได้ถึง **10:00 น. (ICT)** ของวัน cutoff เท่านั้น เลยเวลานี้ออเดอร์ "กำลังเตรียมจัดส่ง" → ล็อก. ไฟล์เดียวจบ: **`lib/edit-lock.ts`** (ไม่มี cron, ไม่มี background job)
+- **check-on-press:** คำนวณเดดไลน์ใหม่ทุกครั้งที่ลูกค้ากดแก้ (เหมือนคูปองหมดอายุ) — ไม่มีงานเบื้องหลังคอยปลดล็อก
+- **กฎเดดไลน์ (คิดจาก "Paid At"):** `cutoffToday = <วันที่จ่าย> 10:00` · จ่าย ≤ 10:00 → เดดไลน์ = วันนั้น 10:00 · จ่าย > 10:00 → เดดไลน์ = วันถัดไป 10:00
+- **เทียบเวลาแบบ string ตายตัว** "YYYY-MM-DD HH:MM" (Bangkok-local, mirror `nowBKK` ใน lib/sheets) — string ความกว้างคงที่เรียงตามเวลาได้ จึงเทียบ lexicographic ตรงๆ **ไม่แตะ UTC** กัน off-by-one
+- **fail-open:** ถ้าหา paid timestamp ไม่ได้ (Paid At/Updated At/Date ว่างหมด) → **ไม่ล็อก** (ไม่บล็อกการแก้ที่ถูกต้องเพราะ timestamp หาย — edit-once ยังกันการ abuse อยู่)
+- **time-lock มาก่อน edit-once** ทุกจุด: เลยเวลา = แก้ไม่ได้ แม้ Address Changed/Size Changed ยังเป็น NO
+- **จุดที่ gate (ครบทั้ง LINE + ฟอร์ม LIFF):**
+  - `app/api/webhook/route.ts` — `handleSelectOrder` (edit_address), `handleChangeSize`, `handleSelectSize` (เช็คซ้ำตอน commit, defense-in-depth)
+  - `app/api/order/[orderId]/route.ts` — server gate ตอน PUT แก้ที่อยู่ (กันลูกค้าเปิดฟอร์ม LIFF ค้างไว้ข้าม 10:00) → ตอบ **403** + ข้อความล็อก
+- **ข้อความล็อก (Option-2, อังกฤษ):** โชว์เลขออเดอร์ + "being prepared for shipping and can no longer be edited" + แนะให้รอของถึงแล้วค่อยขอเปลี่ยนไซส์. **เลี่ยงคำว่า "shipped"** (10:00 = กำลังเตรียม ยังไม่ส่งจริง) — `buildLockedMessage()`
+- **CF (ยืนยันหลังจ่าย) แตกเป็น 2 ข้อความ** (`replyConfirmPayment` ใน webhook): ข้อความ1 = ORDER CONFIRMED + เลขออเดอร์ + ยอด + brand line · ข้อความ2 = บอกเดดไลน์ (`formatDeadline` → "19 Jun 2026 · 10:00 (GMT+7)") + เตือน "edit once only" (เว้นบรรทัดให้อ่านง่าย). ถ้าหาเดดไลน์ไม่ได้ = ส่งแค่ข้อความ1
+- **funcs หลัก:** `computeEditDeadline(paidAt)`, `isEditLocked(order)`, `orderDeadline(order)`, `formatDeadline(deadline)`, `buildLockedMessage(orderId)`, `nowBKK()`
+- **เกี่ยวกับ daily-pull:** ย้าย cron daily-pull 10:00 → **10:10** (ดู Monitoring/Guards) เพื่อดึง worklist หลัง cutoff — ข้อมูลที่อยู่/ไซส์นิ่งแล้ว
+- **smoke test ผ่านครบ 3 เคสบน production (2026-06-13):** CF 2 ข้อความ · แก้ก่อนหมดเวลาได้ + sync Shopify · เลยเวลาแล้วล็อก + โชว์เลขออเดอร์
+
+---
+
 ## Monitoring / Guards (กันปัญหา sync ไม่ให้เกิดอีก)
 ออกแบบเป็น 4 ชั้น หลังเจอบั๊ก "จ่ายแล้ว/แก้แล้วแต่ Shopify ไม่อัพเดทแบบเงียบ" 2 รอบ:
 1. **ห้ามเงียบ (in-line) + read-back verify:** ทุกการเขียน Shopify (สร้าง order / change size / edit shipping) เช็คผลจริง พังเมื่อไหร่ → push LINE เจ้าของ + เขียน `FAILED` ลง Sheet (คอลัมน์ Shopify Order ID ตอนสร้าง, คอลัมน์ "Sync Status" ตอนแก้). **read-back verify:** หลังแก้ size/ที่อยู่สำเร็จ → อ่านออเดอร์จาก Shopify กลับมาเช็คซ้ำว่าค่า *ลงจริง* (size: new variant active + old variant หาย / ที่อยู่: address1/address2/zip ตรง) ไม่ใช่แค่เชื่อ mutation ตอบ ok — ไม่ตรง = ถือว่า FAILED + LINE. กัน "สำเร็จเงียบแต่ไม่ลง" (`getShopifyOrderSnapshot` ใน webhook size handler + order PUT shipping handler)
@@ -152,7 +171,7 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
   - `UNIT-01 auto-cancel orders` → `/api/check-expired` ทุก 1 นาที
   - `UNIT-01 reconcile (Sheet↔Shopify)` → `/api/reconcile?key=<CRON_SECRET>` ทุกวัน 09:00 (Asia/Bangkok, crontab `0 9 * * *`)
   - `UNIT-01 scope-check (Shopify)` → `/api/scope-check?key=<CRON_SECRET>` ทุกวัน 09:00 (Asia/Bangkok, crontab `0 9 * * *`)
-  - `UNIT-01 daily pull` (jobId 7799747) → `/api/daily-pull?key=<CRON_SECRET>` ทุกวัน 10:00 (Asia/Bangkok)
+  - `UNIT-01 daily pull` (jobId 7799747) → `/api/daily-pull?key=<CRON_SECRET>` ทุกวัน **10:10** (Asia/Bangkok) — เลื่อนจาก 10:00 → 10:10 เพื่อให้ดึง worklist **หลัง** edit-lock cutoff (10:00) ลูกค้าแก้ที่อยู่/ไซส์ได้จนถึง 10:00 พอดึงตอน 10:10 จะได้ข้อมูลที่นิ่งแล้ว (window cutoff ของข้อมูลยังเป็น 10:00 เป๊ะ)
   - `UNIT-01 heartbeat` (jobId 7799750) → `/api/daily-pull-heartbeat?key=<CRON_SECRET>` ทุกวัน 10:30 (Asia/Bangkok)
   - helper `pushOwner` ใน `lib/order-sync.ts` ใช้ส่ง LINE หาเจ้าของ — ถ้าได้ LINE เตือน = มีออเดอร์ที่ Sheet กับ Shopify ไม่ตรง ต้องไปแก้มือใน Shopify
   - ยืนยัน endpoint บน production แล้ว: scope-check `ok:true` (scope ครบ), reconcile จับ `#UT-8DW9TX` (ออเดอร์เทสต์ จ่ายแล้วไม่มี Shopify ID) ได้ถูกต้อง
@@ -207,7 +226,7 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 ---
 
 ## สถานะระบบ (อัพเดทล่าสุด)
-**เสร็จแล้ว:** LIFF shop ดึง Shopify, order→Sheets, returning customer auto-fill, Flex+QR, SlipOK→PAID, Shopify Order auto-create, Thai zip auto-fill, Contact Us ครบ, lock system, pre-order/reorder flow, auto-cancel 5 นาที (cron-job.org), backup folder, GitHub auto-deploy, **Stock + Stock Log tabs**, **UI patch รอบ 1-3 (Products/Checkout/Edit) + หัวสินค้าบาร์โค้ดสแตมป์ + Patch 03 (Cart UI: ปุ่ม gradient/เทา, ลบ IMAGE/LOT) + สีสินค้าจาก metafield `custom.color_line` + รูปสินค้าหลายรูป (carousel swipe + dots) + Size Guide จาก metafield `custom.sizechart` (เปิด modal ในหน้าเดิม) + รูปสินค้า object-fit contain (ไม่ crop) + เรียง size S→M→L→XL (helper กลาง ใช้ทั้ง LIFF + Stock tab)** + **normalize เบอร์ +66 ทั้งตอนสร้าง+แก้ที่อยู่ + กันเงียบหายทุกจุด (สร้าง/change size/edit shipping → LINE alert + FAILED/Sync Status) + change size ต้องมี scope `write_order_edits` + Reconciliation cron (/api/reconcile) + Scope health check (/api/scope-check) + ตั้ง cron-job.org รายวัน 09:00 ครบทั้ง reconcile+scope-check** + **UI patch รอบ 4: Checkout (ShippingForm) ตัดหัวซ้ำ — เหลือ `03 ◦ SHIPPING DETAILS` บรรทัดเดียว (ลบ `// STEP 03/03` 2 บรรทัด + bracket row ใต้ progress) · Cart รูปสินค้าใช้ `object-fit: contain` พื้น `C.cream` (ไม่ crop ไม่มีแถบดำ เหมือนหน้า shop)** + **Concurrency mutex (createOrderGuarded + claimPaymentForUser, กัน oversell/ออเดอร์หาย/สลิปซ้ำ) + Loading screen ตอน CHECKOUT (CREATING YOUR ORDER + error 409/503/อื่นๆ) — ขึ้น production แล้ว 2026-06-12** + **Daily Pull Worklist (ดึงออเดอร์ PAID+UNFULFILLED ราย 24 ชม. → แท็บ `WL-วันที่` ในชีตเดิม + reconcile + tag worklisted กันซ้ำ + carry-over + รายงาน LINE ไทย + heartbeat 10:30) + ตั้ง cron-job.org 10:00/10:30 — ขึ้น production แล้ว 2026-06-12**
+**เสร็จแล้ว:** LIFF shop ดึง Shopify, order→Sheets, returning customer auto-fill, Flex+QR, SlipOK→PAID, Shopify Order auto-create, Thai zip auto-fill, Contact Us ครบ, lock system, pre-order/reorder flow, auto-cancel 5 นาที (cron-job.org), backup folder, GitHub auto-deploy, **Stock + Stock Log tabs**, **UI patch รอบ 1-3 (Products/Checkout/Edit) + หัวสินค้าบาร์โค้ดสแตมป์ + Patch 03 (Cart UI: ปุ่ม gradient/เทา, ลบ IMAGE/LOT) + สีสินค้าจาก metafield `custom.color_line` + รูปสินค้าหลายรูป (carousel swipe + dots) + Size Guide จาก metafield `custom.sizechart` (เปิด modal ในหน้าเดิม) + รูปสินค้า object-fit contain (ไม่ crop) + เรียง size S→M→L→XL (helper กลาง ใช้ทั้ง LIFF + Stock tab)** + **normalize เบอร์ +66 ทั้งตอนสร้าง+แก้ที่อยู่ + กันเงียบหายทุกจุด (สร้าง/change size/edit shipping → LINE alert + FAILED/Sync Status) + change size ต้องมี scope `write_order_edits` + Reconciliation cron (/api/reconcile) + Scope health check (/api/scope-check) + ตั้ง cron-job.org รายวัน 09:00 ครบทั้ง reconcile+scope-check** + **UI patch รอบ 4: Checkout (ShippingForm) ตัดหัวซ้ำ — เหลือ `03 ◦ SHIPPING DETAILS` บรรทัดเดียว (ลบ `// STEP 03/03` 2 บรรทัด + bracket row ใต้ progress) · Cart รูปสินค้าใช้ `object-fit: contain` พื้น `C.cream` (ไม่ crop ไม่มีแถบดำ เหมือนหน้า shop)** + **Concurrency mutex (createOrderGuarded + claimPaymentForUser, กัน oversell/ออเดอร์หาย/สลิปซ้ำ) + Loading screen ตอน CHECKOUT (CREATING YOUR ORDER + error 409/503/อื่นๆ) — ขึ้น production แล้ว 2026-06-12** + **Daily Pull Worklist (ดึงออเดอร์ PAID+UNFULFILLED ราย 24 ชม. → แท็บ `WL-วันที่` ในชีตเดิม + reconcile + tag worklisted กันซ้ำ + carry-over + รายงาน LINE ไทย + heartbeat 10:30) + ตั้ง cron-job.org 10:00/10:30 — ขึ้น production แล้ว 2026-06-12** + **Edit-Lock ราย order (แก้ที่อยู่/ไซส์ได้ถึง 10:00 ICT ของวัน cutoff, check-on-press, `lib/edit-lock.ts`) + CF ยืนยันแตกเป็น 2 ข้อความ (เลขออเดอร์+brand / เดดไลน์+edit once) + gate ครบทั้ง LINE handler + ฟอร์ม LIFF (403) + ย้าย cron daily-pull 10:00→10:10 — smoke test ผ่าน ขึ้น production แล้ว 2026-06-13**
 **กำลังทำ:** —
 **รอทำ:** Finance/REVENUE เชื่อม, Platform Fee, ต้นทุน/กำไร, Admin Dashboard, Custom Domain, Rich Menu เต็มรูปแบบ
 
