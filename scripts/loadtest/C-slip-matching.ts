@@ -19,7 +19,7 @@ import {
   findPendingOrder,
   checkDuplicateTransRef,
   updateOrderStatus,
-  claimAndMarkPaid,
+  claimPaymentForUser,
 } from "../../lib/sheets";
 import { clearTab, runConcurrent, banner, sleep, withRetry } from "./_util";
 
@@ -121,13 +121,15 @@ async function part2DoubleClaim() {
       `→ ${baseAccepted > 1 ? `DOUBLE-CLAIM (${baseAccepted})` : "single"}`
   );
 
-  // FIXED: claimAndMarkPaid (locked dedup+write).
+  // FIXED: claimPaymentForUser (the function the webhook route now calls) —
+  // locked match + dedup + write in ONE critical section. Two concurrent claims
+  // carrying the SAME Transaction Ref: the second must be rejected as duplicate.
   await sleep(20000);
   await clearTab("Orders");
   await appendOrder(order(900));
   await appendOrder(order(901));
   const fixed = await runConcurrent(2, (i) =>
-    claimAndMarkPaid(`#LT-C${900 + i}`, REF).then((r) => {
+    claimPaymentForUser(`Uslip_${900 + i}`, AMOUNT, REF).then((r) => {
       if (!r.ok) throw new Error(r.reason);
       return r;
     })

@@ -3,8 +3,7 @@ import { validateSignature } from "@line/bot-sdk";
 import { getLineClient } from "@/lib/line";
 import { downloadLineImage, verifySlip } from "@/lib/slipok";
 import {
-  findPendingOrder,
-  checkDuplicateTransRef,
+  claimPaymentForUser,
   updateOrderStatus,
   getOrder,
   setOrderSyncStatus,
@@ -148,39 +147,38 @@ async function handleSlipImage(
     const transRef = slipResult.data.transRef;
     console.log("[slip] Amount:", amount, "TransRef:", transRef);
 
-    // 4. Check for duplicate transRef
-    const isDuplicate = await checkDuplicateTransRef(transRef);
-    if (isDuplicate) {
-      console.log("[slip] Duplicate transRef:", transRef);
-      return replyDuplicateSlip();
-    }
-
-    // 5. Find matching PENDING order
-    const order = await findPendingOrder(userId, amount);
-    if (!order) {
+    // 4-6. Atomically: reject duplicate slips, find the NEWEST matching PENDING
+    //      order (user + exact amount), and mark it PAID — all inside ONE locked
+    //      critical section (claimPaymentForUser → withLock). This closes two
+    //      races at once: the same transRef delivered twice, AND two distinct
+    //      payments for the same user+amount both claiming the same row.
+    const claim = await claimPaymentForUser(userId, amount, transRef);
+    if (!claim.ok) {
+      if (claim.reason === "duplicate") {
+        console.log("[slip] Duplicate transRef:", transRef);
+        return replyDuplicateSlip();
+      }
       console.log("[slip] No matching order for userId:", userId, "amount:", amount);
       return replyNoMatchingOrder(amount);
     }
-
-    // 6. Update order status to PAID
+    const order = claim.order!;
     const orderId = order["Order ID"];
-    console.log("[slip] Updating order:", orderId);
-    await updateOrderStatus(orderId, "PAID", transRef);
+    console.log("[slip] Claimed + marked PAID:", orderId);
 
     // Stock Log: SOLD (reserved stock is now a confirmed sale — no extra deduction)
     await logOrderStockMovement(order, "SOLD", 0, "จ่ายเงินแล้ว ขายสำเร็จ");
 
     // 7. Create Shopify Order (with retry + owner alert on failure).
-    //    Runs after the customer confirmation is prepared so payment is never
-    //    blocked, but a failure is no longer silent — see syncPaidOrderToShopify.
-    const freshOrder = await getOrder(orderId);
-    if (freshOrder && freshOrder["Variant IDs"]) {
-      await syncPaidOrderToShopify(orderId, freshOrder);
+    //    Runs after the order is persisted PAID so payment is never blocked, but
+    //    a failure is no longer silent — see syncPaidOrderToShopify. The claimed
+    //    order row already carries the live Variant IDs, so no extra read needed.
+    if (order["Variant IDs"]) {
+      await syncPaidOrderToShopify(orderId, order);
     } else {
       console.error("[slip] No variant IDs — cannot create Shopify order:", orderId);
       await alertOwnerOrderFailed(
         orderId,
-        freshOrder || { "Order ID": orderId },
+        order,
         "No variant IDs on order row"
       );
     }
