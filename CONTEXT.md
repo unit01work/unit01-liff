@@ -170,7 +170,11 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 - **cache doc handle 5 นาที (`getReadyDoc()` ใน `lib/sheets.ts`)** — `doc.loadInfo()` ดึงแค่ metadata (รายชื่อแท็บ/pointer header ~900ms) เลยแคชไว้ 5 นาที ไม่ต้อง round-trip ทุกใบ **ข้อมูลแถว/สต็อกยังอ่านสดทุกครั้งผ่าน `getRows()`** → เลขคำนวณ oversell ไม่มีทางเก่า. self-heal: ถ้า cache พลาดแท็บ Orders/Stock Log จะ force refresh (`getReadyDoc(true)`) ก่อนเขียน + มี `invalidateDocCache()`. คอลัมน์/แท็บใหม่ติดภายใน ≤5 นาที (deploy ล้าง cache ทันที)
 - **ลบ `loadHeaderRow()` ซ้ำตอนอ่าน Stock** — `getRows()` โหลด header ของชีตนั้นในตัวอยู่แล้ว → เรียกซ้ำก่อนหน้าเปลือง ~500ms/ใบ
 - **ย้าย LINE push (Flex QR + เตือน 5 นาที) ไป background ด้วย `after()` (`next/server`)** — ตอบ HTTP กลับทันทีหลัง order ลงชีต ไม่บล็อกรอ LINE 2 round-trip. **never-silent ยังอยู่:** `after()` รันแม้ response จบแล้ว, ถ้า push พังจะเรียก `alertOwnerNotifyFailed()` แจ้งเจ้าของว่าลูกค้าอาจไม่ได้ QR (เดิม console.error เฉยๆ)
-- ไม่แตะ `getOrCreateSheet()` (header migration ~500ms) จงใจเก็บเป็นตาข่ายกันชีตผิดโครงสร้าง — flag ไว้เป็น optimize อนาคต
+- **รอบ 2 (2026-06-12):** ลดต่ออีกเหลือ **warm ~1.2s** (จาก ~2.3s → **~49% เร็วขึ้น**, cold ใบแรกหลัง deploy ~2.4s) แก้ 3 จุดใน `createOrderGuarded` วัด before/after + รัน A→D ผ่านทุกการ์ด (oversell 4→0, สลิปซ้ำ 2→1, wrong-user 0, reserved/sold/available เป๊ะ, dup/corrupt 0):
+  - **อ่าน Orders + Stock พร้อมกัน (`Promise.all`)** — เดิมอ่านเรียงกันเสียเวลาเปล่า. **error handling แยกชัด:** Orders พัง → reject ทะลุ → route ตอบ **503 + ไม่สร้างออเดอร์** (เกิดก่อน `addRow` เสมอ ไม่มีออเดอร์ครึ่งใบ); Stock พัง → `.catch`→สต็อก 0 → availability ไม่ผ่าน → **409** (กัน oversell ไว้ก่อน) — ไม่ค้าง ไม่มี dangling rejection
+  - **ลบ `loadHeaderRow` ซ้ำของ Orders** — migrate คอลัมน์จาก header ที่ `getRows()` โหลดมาแล้ว แทน `getOrCreateSheet()` ที่ยิง `loadHeaderRow` แยก (~500ms) — ยัง auto-migrate คอลัมน์ใหม่อยู่ (fallback สร้าง tab ถ้าหายจริง)
+  - **verify header "Stock Log" ครั้งเดียวต่อ doc cache** (`getStockLogSheetVerified` + flag `_stockLogHeaderOK`, reset ทุกครั้งที่ refresh cache TTL/deploy/invalidate) — warm order ข้าม `loadHeaderRow` round-trip (~500ms), คอลัมน์ใหม่ติด ≤5 นาที
+  - **ไม่ทำ:** เขียน order + RESERVED log พร้อมกัน (จงใจ — เขียน order ก่อนคือตัวกันออเดอร์หายถ้า log พัง แลก 0.6s ไม่คุ้ม)
 
 ### Loading screen ตอน CHECKOUT (เสร็จแล้ว — ขึ้น production แล้ว 2026-06-12)
 หลัง mutex/createOrderGuarded เพิ่มการอ่าน Stock การสร้างออเดอร์ใช้เวลาขึ้น (โหลดหนักได้หลายวินาที) จึงเพิ่มหน้า loading กันลูกค้ากดซ้ำ/งง
