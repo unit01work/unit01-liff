@@ -5,6 +5,7 @@ import { buildOrderFlex } from "@/lib/flex-order";
 import { getOrderAmount, saveOrder } from "@/lib/order-store";
 import { updateShopifyShippingAddress, getShopifyOrderSnapshot } from "@/lib/shopify";
 import { alertOwnerEditFailed } from "@/lib/order-sync";
+import { isEditLocked, buildLockedMessage } from "@/lib/edit-lock";
 
 const LIFF_URL = "https://liff.line.me/2010192572-jfj8ev6c";
 const BASE_URL = "https://unit01-liff.vercel.app";
@@ -128,6 +129,13 @@ export async function PUT(
     // ── EDIT SHIPPING MODE (PAID order) ──
     if (!body.firstName || !body.lastName || !body.phone || !body.address || !body.postalCode) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    }
+
+    // Time-lock takes precedence over edit-once: past the 10:00 deadline the
+    // order is being prepared for shipping and can no longer be edited. Server
+    // gate so a customer who kept the LIFF form open past 10:00 is still blocked.
+    if (isPaid && isEditLocked(existingOrder)) {
+      return NextResponse.json({ error: buildLockedMessage(orderId) }, { status: 403 });
     }
 
     // Check address lock for PAID orders
