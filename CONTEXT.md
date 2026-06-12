@@ -156,7 +156,7 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 
 ---
 
-## Concurrency / กันแย่งกันเขียน (เสร็จแล้ว — branch `loadtest`)
+## Concurrency / กันแย่งกันเขียน (เสร็จแล้ว — merge + ขึ้น production แล้ว 2026-06-12)
 เจอ race 3 แบบจาก load test (50 ออเดอร์พร้อมกัน) แก้ด้วย **in-process async mutex** `withLock()` (`lib/sheets.ts`):
 - **`withLock(fn)`** — คิว Promise ตัวเดียว ทำงานทีละใบ (serialize) critical section ทั้งหมด แก้ 3 ปัญหาพร้อมกัน: oversell, ออเดอร์หาย, และ 429 burst (เพราะทีละใบ = throttle ในตัว)
 - **order route → `createOrderGuarded()`** (1 ใบ = อ่าน Orders 1 + Stock 1, เช็ค available = Shopify Stock − committed(PENDING+PAID), แล้วค่อย append + log RESERVED ใน lock เดียว) — สต็อกไม่พอ → ตอบ `409 out_of_stock`, ชีต error/quota → `503 order_busy` (ให้ลูกค้า retry, ไม่สร้างออเดอร์ครึ่งๆ)
@@ -164,6 +164,14 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 - ⚠️ **ข้อจำกัด:** เป็น in-process lock — ถ้า Vercel scale หลาย instance lock จะไม่ข้าม instance (reconcile รายวันเป็นตาข่ายจับ race ข้าม instance ที่เหลือ)
 - **bottleneck = Google Sheets quota 60 read + 60 write/นาที** — 20-50 ใบพร้อมกันจะโดน throttle (บางใบได้ 503 ให้ retry) นี่คือเหตุผลหลักที่ควรพิจารณา Shopify inventory hold สำหรับดรอปใหญ่ (ข้างล่าง)
 - **Load test:** `scripts/loadtest/` (รันบน TEST sheet เท่านั้น — `_env.ts` กัน prod id). Test A=write integrity, B=oversell, C=slip dedup/match, D=reserved/available, **E=ยิง HTTP `/api/order` route จริง** (มี safety pre-flight ยืนยัน server ชี้ test sheet ก่อนยิงโหลด). ผลล่าสุด: ออเดอร์ที่ตอบ 200 ลงครบ 100% (0 หาย/0 ทับ), oversell 0, สลิปซ้ำ 2→1, accounting เป๊ะ
+
+### Loading screen ตอน CHECKOUT (เสร็จแล้ว — ขึ้น production แล้ว 2026-06-12)
+หลัง mutex/createOrderGuarded เพิ่มการอ่าน Stock การสร้างออเดอร์ใช้เวลาขึ้น (โหลดหนักได้หลายวินาที) จึงเพิ่มหน้า loading กันลูกค้ากดซ้ำ/งง
+- **`components/LoadingOverlay.tsx`** — overlay เต็มจอตอนกด CHECKOUT (`screen === "creating"` ใน `app/shop/page.tsx`) ระหว่างบันทึกออเดอร์ + สร้าง PromptPay QR
+- **state loading:** "CREATING YOUR ORDER" + capsule progress (gradient `WARM_STOPS` ใน `lib/tokens.ts`) + "// PLEASE WAIT"
+- **error mapping จาก status ของ order route:** `409` → OUT OF STOCK (ปุ่ม BACK TO CART กลับตะกร้า), `503` → SYSTEM BUSY (ปุ่ม TRY AGAIN), อื่นๆ/network → SOMETHING WENT WRONG (TRY AGAIN)
+- ใช้ฟอนต์แบรนด์ **Magda Clean Mono (`FM`)** + โทนเดียวกับ ORDER CONFIRMED — ยืนยันตอนรันจริงว่า `document.fonts.check('Magda Clean Mono') = true`, heading คำนวณได้ Magda จริง (ไม่ใช่ default mono)
+- ไม่แตะ logic ส่งออเดอร์/สร้าง QR; ReorderFlow (PUT `/api/order/[id]`) ยังไม่ใส่ loading (ไม่คืน 409/503)
 
 ### Shopify inventory hold (อนาคต — ยังไม่ทำ, ทางเลือกที่แข็งกว่าสำหรับดรอปใหญ่)
 ตอนนี้สต็อกเป็น **soft-reserve** (นับ PENDING ในชีตเอง) — ดีพอสำหรับวอลุ่มปกติ แต่ผูกกับ Sheets quota และ in-process lock
@@ -174,7 +182,7 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 ---
 
 ## สถานะระบบ (อัพเดทล่าสุด)
-**เสร็จแล้ว:** LIFF shop ดึง Shopify, order→Sheets, returning customer auto-fill, Flex+QR, SlipOK→PAID, Shopify Order auto-create, Thai zip auto-fill, Contact Us ครบ, lock system, pre-order/reorder flow, auto-cancel 5 นาที (cron-job.org), backup folder, GitHub auto-deploy, **Stock + Stock Log tabs**, **UI patch รอบ 1-3 (Products/Checkout/Edit) + หัวสินค้าบาร์โค้ดสแตมป์ + Patch 03 (Cart UI: ปุ่ม gradient/เทา, ลบ IMAGE/LOT) + สีสินค้าจาก metafield `custom.color_line` + รูปสินค้าหลายรูป (carousel swipe + dots) + Size Guide จาก metafield `custom.sizechart` (เปิด modal ในหน้าเดิม) + รูปสินค้า object-fit contain (ไม่ crop) + เรียง size S→M→L→XL (helper กลาง ใช้ทั้ง LIFF + Stock tab)** + **normalize เบอร์ +66 ทั้งตอนสร้าง+แก้ที่อยู่ + กันเงียบหายทุกจุด (สร้าง/change size/edit shipping → LINE alert + FAILED/Sync Status) + change size ต้องมี scope `write_order_edits` + Reconciliation cron (/api/reconcile) + Scope health check (/api/scope-check) + ตั้ง cron-job.org รายวัน 09:00 ครบทั้ง reconcile+scope-check** + **UI patch รอบ 4: Checkout (ShippingForm) ตัดหัวซ้ำ — เหลือ `03 ◦ SHIPPING DETAILS` บรรทัดเดียว (ลบ `// STEP 03/03` 2 บรรทัด + bracket row ใต้ progress) · Cart รูปสินค้าใช้ `object-fit: contain` พื้น `C.cream` (ไม่ crop ไม่มีแถบดำ เหมือนหน้า shop)**
+**เสร็จแล้ว:** LIFF shop ดึง Shopify, order→Sheets, returning customer auto-fill, Flex+QR, SlipOK→PAID, Shopify Order auto-create, Thai zip auto-fill, Contact Us ครบ, lock system, pre-order/reorder flow, auto-cancel 5 นาที (cron-job.org), backup folder, GitHub auto-deploy, **Stock + Stock Log tabs**, **UI patch รอบ 1-3 (Products/Checkout/Edit) + หัวสินค้าบาร์โค้ดสแตมป์ + Patch 03 (Cart UI: ปุ่ม gradient/เทา, ลบ IMAGE/LOT) + สีสินค้าจาก metafield `custom.color_line` + รูปสินค้าหลายรูป (carousel swipe + dots) + Size Guide จาก metafield `custom.sizechart` (เปิด modal ในหน้าเดิม) + รูปสินค้า object-fit contain (ไม่ crop) + เรียง size S→M→L→XL (helper กลาง ใช้ทั้ง LIFF + Stock tab)** + **normalize เบอร์ +66 ทั้งตอนสร้าง+แก้ที่อยู่ + กันเงียบหายทุกจุด (สร้าง/change size/edit shipping → LINE alert + FAILED/Sync Status) + change size ต้องมี scope `write_order_edits` + Reconciliation cron (/api/reconcile) + Scope health check (/api/scope-check) + ตั้ง cron-job.org รายวัน 09:00 ครบทั้ง reconcile+scope-check** + **UI patch รอบ 4: Checkout (ShippingForm) ตัดหัวซ้ำ — เหลือ `03 ◦ SHIPPING DETAILS` บรรทัดเดียว (ลบ `// STEP 03/03` 2 บรรทัด + bracket row ใต้ progress) · Cart รูปสินค้าใช้ `object-fit: contain` พื้น `C.cream` (ไม่ crop ไม่มีแถบดำ เหมือนหน้า shop)** + **Concurrency mutex (createOrderGuarded + claimPaymentForUser, กัน oversell/ออเดอร์หาย/สลิปซ้ำ) + Loading screen ตอน CHECKOUT (CREATING YOUR ORDER + error 409/503/อื่นๆ) — ขึ้น production แล้ว 2026-06-12**
 **กำลังทำ:** —
 **รอทำ:** Finance/REVENUE เชื่อม, Platform Fee, ต้นทุน/กำไร, Admin Dashboard, Custom Domain, Rich Menu เต็มรูปแบบ
 
