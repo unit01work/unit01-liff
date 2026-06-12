@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getLineClient } from "@/lib/line";
 import { saveOrder } from "@/lib/order-store";
 import { buildOrderFlex } from "@/lib/flex-order";
-import { appendOrder, appendStockLog } from "@/lib/sheets";
+import { createOrderGuarded, type ReserveLineItem } from "@/lib/sheets";
 
 interface CartItem {
   name: string;
@@ -59,53 +59,71 @@ export async function POST(request: NextRequest) {
     console.log("LINE User:", body.lineUserId);
     console.log("=================");
 
-    // 1. Save order amount for QR generation (in-memory)
-    saveOrder(orderIdClean, total);
+    // Build variant IDs string + line items for the stock guard.
+    const variantIds = cart
+      .filter((c) => c.shopifyVariantId)
+      .map((c) => `${c.shopifyVariantId}:${c.qty}`)
+      .join(",");
+    const lineItems: ReserveLineItem[] = cart
+      .filter((c) => c.shopifyVariantId)
+      .map((c) => ({
+        name: c.name,
+        size: c.size,
+        variantId: c.shopifyVariantId!,
+        qty: c.qty,
+      }));
 
-    // 2. Save to Google Sheets
+    // 1. Guarded create — server-side stock check + append + RESERVED log, all
+    //    inside one serialised (withLock) critical section. This prevents both
+    //    oversell (two buyers for the last unit) and lost orders (concurrent
+    //    addRow clobbering). On a stock-error/throw we DO NOT create the order.
+    let guard;
     try {
-      // Build variant IDs string: "shopifyVariantId:qty,shopifyVariantId:qty"
-      const variantIds = cart
-        .filter((c) => c.shopifyVariantId)
-        .map((c) => `${c.shopifyVariantId}:${c.qty}`)
-        .join(",");
-
-      await appendOrder({
-        orderId,
-        lineUserId: body.lineUserId,
-        items: cart,
-        sub,
-        ship,
-        total,
-        firstName: shipping.firstName,
-        lastName: shipping.lastName,
-        phone: shipping.phone,
-        address: shipping.address,
-        subDistrict: shipping.subDistrict,
-        district: shipping.district,
-        province: shipping.province,
-        postalCode: shipping.postalCode,
-        variantIds,
-      });
-      console.log("✅ Saved to Google Sheets");
-
-      // Stock Log: RESERVED (soft-reserve while PENDING)
-      for (const c of cart) {
-        if (!c.shopifyVariantId) continue;
-        await appendStockLog({
-          type: "RESERVED",
-          product: c.name,
-          size: c.size,
-          variantId: c.shopifyVariantId,
-          change: -c.qty,
+      guard = await createOrderGuarded(
+        {
           orderId,
-          note: "จองชั่วคราว (PENDING)",
-        });
-      }
+          lineUserId: body.lineUserId,
+          items: cart,
+          sub,
+          ship,
+          total,
+          firstName: shipping.firstName,
+          lastName: shipping.lastName,
+          phone: shipping.phone,
+          address: shipping.address,
+          subDistrict: shipping.subDistrict,
+          district: shipping.district,
+          province: shipping.province,
+          postalCode: shipping.postalCode,
+          variantIds,
+        },
+        lineItems
+      );
     } catch (sheetErr) {
-      console.error("❌ Google Sheets save failed:", sheetErr instanceof Error ? sheetErr.message : String(sheetErr));
-      // Don't block the order if Sheets fails
+      console.error(
+        "❌ createOrderGuarded threw:",
+        sheetErr instanceof Error ? sheetErr.message : String(sheetErr)
+      );
+      // Sheet error (e.g. quota) — ask the client to retry rather than risk a
+      // half-saved order or an oversell from skipping the check.
+      return NextResponse.json(
+        { error: "order_busy", message: "ระบบกำลังประมวลผลออเดอร์ กรุณาลองใหม่อีกครั้ง" },
+        { status: 503 }
+      );
     }
+
+    if (!guard.ok) {
+      console.warn("⛔️ Order rejected (out of stock):", guard.reason);
+      return NextResponse.json(
+        { error: "out_of_stock", message: "สินค้าบางรายการหมด กรุณาตรวจสอบตะกร้าอีกครั้ง" },
+        { status: 409 }
+      );
+    }
+    console.log("✅ Saved to Google Sheets (guarded)");
+
+    // 2. Save order amount for QR generation (in-memory) — only after the order
+    //    row is actually persisted.
+    saveOrder(orderIdClean, total);
 
     // 3. Send Flex Message
     if (

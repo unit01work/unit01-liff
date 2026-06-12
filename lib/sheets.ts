@@ -102,7 +102,7 @@ async function getOrCreateSheet(doc: GoogleSpreadsheet) {
   return sheet;
 }
 
-export async function appendOrder(data: {
+export interface AppendOrderData {
   orderId: string;
   lineUserId: string;
   items: { name: string; size: string; price: number; qty: number }[];
@@ -118,18 +118,16 @@ export async function appendOrder(data: {
   province: string;
   postalCode: string;
   variantIds?: string;
-}) {
-  const doc = getDoc();
-  await doc.loadInfo();
-  const sheet = await getOrCreateSheet(doc);
+}
 
+/** Build the "Orders" row value object. Shared by appendOrder + createOrderGuarded
+ *  so the two write paths can never drift in column layout. */
+function buildOrderRowValues(data: AppendOrderData): Record<string, string | number> {
   const itemsStr = data.items
     .map((c) => `${c.name} (${c.size}) x${c.qty}`)
     .join(", ");
-
   const now = nowBKK();
-
-  await sheet.addRow({
+  return {
     "Order ID": data.orderId,
     "Date": now,
     "LINE User ID": data.lineUserId,
@@ -148,7 +146,14 @@ export async function appendOrder(data: {
     "Postal Code": data.postalCode,
     "Updated At": now,
     "Variant IDs": data.variantIds || "",
-  });
+  };
+}
+
+export async function appendOrder(data: AppendOrderData) {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = await getOrCreateSheet(doc);
+  await sheet.addRow(buildOrderRowValues(data));
 }
 
 // Match orderId with or without # prefix
@@ -970,4 +975,274 @@ export async function refreshStockTab(): Promise<void> {
     await stockSheet.addRows(newRows);
   }
   console.log(`[sheets] refreshStockTab: wrote ${newRows.length} variant rows`);
+}
+
+/* ──────────────────────────────────────────────────────────────
+ * CONCURRENCY SAFETY — added to close two race conditions found by
+ * the load test:
+ *   1. Oversell: the order route had NO server-side stock check, so N
+ *      simultaneous buyers of a size with stock 1 all created orders.
+ *   2. Double slip claim: checkDuplicateTransRef() then updateOrderStatus()
+ *      was a read-then-write gap, so two slips with the same Transaction Ref
+ *      could both mark different orders PAID.
+ *
+ * Mitigation: a single in-process async mutex serialises every check-then-write
+ * critical section. This fully removes both races *within a single Node/Vercel
+ * instance*. Vercel can spin up multiple instances under heavy bursts, so this
+ * is not a distributed lock — but combined with the daily reconcile watchdog
+ * (which now also compares stock & flags FAILED syncs) it makes any residual
+ * cross-instance race rare AND detectable rather than silent. A hard guarantee
+ * would require an authoritative transactional store (DB or Shopify inventory
+ * reservation); documented here intentionally.
+ * ────────────────────────────────────────────────────────────── */
+
+let _lockTail: Promise<unknown> = Promise.resolve();
+/** Serialise an async critical section against all other withLock() callers. */
+export function withLock<T>(fn: () => Promise<T>): Promise<T> {
+  const result = _lockTail.then(() => fn());
+  _lockTail = result.catch(() => {});
+  return result;
+}
+
+/** variantId → Shopify Stock, read from the "Stock" tab (authoritative qty). */
+export async function getStockMap(): Promise<Record<string, number>> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = doc.sheetsByTitle["Stock"];
+  const map: Record<string, number> = {};
+  if (!sheet) return map;
+  try { await sheet.loadHeaderRow(); } catch { return map; }
+  const rows = await sheet.getRows();
+  for (const r of rows) {
+    const vid = (r.get("Variant ID") || "").trim();
+    if (!vid) continue;
+    map[vid] = Number(r.get("Shopify Stock") || 0);
+  }
+  return map;
+}
+
+/** variantId → committed units (PENDING reserved + PAID sold) from "Orders". */
+export async function getCommittedMap(): Promise<Record<string, number>> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = doc.sheetsByTitle["Orders"];
+  const map: Record<string, number> = {};
+  if (!sheet) return map;
+  try { await sheet.loadHeaderRow(); } catch { return map; }
+  const rows = await sheet.getRows();
+  for (const row of rows) {
+    const status = (row.get("Status") || "").toUpperCase();
+    if (status !== "PENDING" && status !== "PAID") continue;
+    const vids = (row.get("Variant IDs") || "") as string;
+    for (const part of vids.split(",")) {
+      const [vid, q] = part.trim().split(":");
+      if (!vid) continue;
+      map[vid] = (map[vid] || 0) + (parseInt(q, 10) || 1);
+    }
+  }
+  return map;
+}
+
+export interface ReserveLineItem {
+  name: string;
+  size: string;
+  variantId: string;
+  qty: number;
+}
+
+export interface GuardedOrderResult {
+  ok: boolean;
+  reason?: string;
+  shortVariantId?: string;
+}
+
+/**
+ * Create an order ONLY if every line item still has stock. The stock check and
+ * the row append happen inside a single locked critical section, so two
+ * simultaneous buyers can never both pass the check for the last unit.
+ *
+ * Optimised path: one getDoc()/loadInfo(), one read of the Orders tab and one
+ * read of the Stock tab, then a single Orders.addRow + a single batched Stock
+ * Log addRows. Keeps the locked critical section short so the serialised queue
+ * drains as fast as the Sheets API allows.
+ */
+export async function createOrderGuarded(
+  data: AppendOrderData,
+  lineItems: ReserveLineItem[]
+): Promise<GuardedOrderResult> {
+  return withLock(async () => {
+    const doc = getDoc();
+    await doc.loadInfo();
+    const ordersSheet = await getOrCreateSheet(doc);
+
+    // ── committed (PENDING + PAID) per variant — single read of Orders ──
+    const committed: Record<string, number> = {};
+    const orderRows = await ordersSheet.getRows();
+    for (const row of orderRows) {
+      const status = (row.get("Status") || "").toUpperCase();
+      if (status !== "PENDING" && status !== "PAID") continue;
+      for (const part of (row.get("Variant IDs") || "").split(",")) {
+        const [vid, q] = part.trim().split(":");
+        if (!vid) continue;
+        committed[vid] = (committed[vid] || 0) + (parseInt(q, 10) || 1);
+      }
+    }
+
+    // ── Shopify stock per variant — single read of Stock tab ──
+    const stock: Record<string, number> = {};
+    const stockSheet = doc.sheetsByTitle["Stock"];
+    if (stockSheet) {
+      try {
+        await stockSheet.loadHeaderRow();
+        for (const r of await stockSheet.getRows()) {
+          const vid = (r.get("Variant ID") || "").trim();
+          if (vid) stock[vid] = Number(r.get("Shopify Stock") || 0);
+        }
+      } catch {
+        /* no Stock tab / empty — treated as 0 stock below */
+      }
+    }
+
+    // ── availability check (aggregate dup variants in one cart) ──
+    const want: Record<string, number> = {};
+    for (const it of lineItems) {
+      if (!it.variantId) continue;
+      want[it.variantId] = (want[it.variantId] || 0) + it.qty;
+    }
+    for (const [vid, qty] of Object.entries(want)) {
+      const available = (stock[vid] ?? 0) - (committed[vid] ?? 0);
+      if (qty > available) {
+        return {
+          ok: false,
+          shortVariantId: vid,
+          reason: `out of stock: variant ${vid} (available ${available}, requested ${qty})`,
+        };
+      }
+    }
+
+    // ── append order (reuse the loaded sheet — no extra loadInfo) ──
+    await ordersSheet.addRow(buildOrderRowValues(data));
+
+    // ── RESERVED stock-log rows, batched into one write ──
+    const reserved = lineItems.filter((it) => it.variantId);
+    if (reserved.length > 0) {
+      const logSheet = await getOrCreateTab(doc, "Stock Log", STOCK_LOG_HEADERS);
+      const now = nowBKK();
+      await logSheet.addRows(
+        reserved.map((it) => ({
+          "Date": now,
+          "Type": "RESERVED",
+          "Product": it.name,
+          "Size": it.size,
+          "Variant ID": it.variantId,
+          "Change": String(-it.qty),
+          "Stock After": "",
+          "Order ID": data.orderId,
+          "Note": "จองชั่วคราว (PENDING)",
+        }))
+      );
+    }
+    return { ok: true };
+  });
+}
+
+/**
+ * Atomically claim a slip's Transaction Ref and mark the order PAID. The
+ * duplicate-ref check and the status write run inside one locked section, so a
+ * Transaction Ref can be used to mark at most one order PAID even under
+ * simultaneous webhook deliveries.
+ */
+export async function claimAndMarkPaid(
+  orderId: string,
+  transRef: string
+): Promise<{ ok: boolean; reason?: string }> {
+  return withLock(async () => {
+    if (transRef && (await checkDuplicateTransRef(transRef))) {
+      return { ok: false, reason: "duplicate transRef" };
+    }
+    const ok = await updateOrderStatus(orderId, "PAID", transRef);
+    return ok ? { ok: true } : { ok: false, reason: "order not found" };
+  });
+}
+
+export type ClaimReason = "duplicate" | "no_match";
+export interface ClaimPaymentResult {
+  ok: boolean;
+  reason?: ClaimReason;
+  order?: OrderRow;
+}
+
+/**
+ * Match a payment to a PENDING order and mark it PAID — ALL inside one locked
+ * critical section. This closes two races at once:
+ *   - same Transaction Ref delivered twice → second is rejected as "duplicate"
+ *   - two distinct payments (same user + amount) → each claims a DIFFERENT
+ *     PENDING row instead of both overwriting the newest one, because the match
+ *     re-reads live PENDING state under the lock.
+ * Single read of Orders + single row save. Returns the claimed order on success.
+ */
+export async function claimPaymentForUser(
+  userId: string,
+  amount: number,
+  transRef: string
+): Promise<ClaimPaymentResult> {
+  return withLock(async () => {
+    const doc = getDoc();
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle["Orders"];
+    if (!sheet) return { ok: false, reason: "no_match" };
+    try { await sheet.loadHeaderRow(); } catch { return { ok: false, reason: "no_match" }; }
+
+    const rows = await sheet.getRows();
+
+    // Duplicate transRef guard (read the same snapshot we'll write into).
+    if (transRef && rows.some((r) => (r.get("Transaction Ref") || "") === transRef)) {
+      return { ok: false, reason: "duplicate" };
+    }
+
+    // Newest PENDING order matching user + exact amount.
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const row = rows[i];
+      const status = (row.get("Status") || "").toUpperCase();
+      const lineUserId = row.get("LINE User ID") || "";
+      const total = Number(row.get("Total") || 0);
+      if (status === "PENDING" && lineUserId === userId && total === amount) {
+        const now = nowBKK();
+        row.set("Status", "PAID");
+        if (transRef) row.set("Transaction Ref", transRef);
+        row.set("Paid At", now);
+        row.set("Updated At", now);
+        await row.save();
+        return {
+          ok: true,
+          order: {
+            "Order ID": row.get("Order ID"),
+            "Date": row.get("Date"),
+            "LINE User ID": lineUserId,
+            "Status": "PAID",
+            "Items": row.get("Items"),
+            "Subtotal": Number(row.get("Subtotal")),
+            "Shipping Fee": Number(row.get("Shipping Fee")),
+            "Total": total,
+            "First Name": row.get("First Name"),
+            "Last Name": row.get("Last Name"),
+            "Phone": row.get("Phone"),
+            "Address": row.get("Address"),
+            "Sub-district": row.get("Sub-district"),
+            "District": row.get("District"),
+            "Province": row.get("Province"),
+            "Postal Code": row.get("Postal Code"),
+            "Updated At": now,
+            "Transaction Ref": transRef || row.get("Transaction Ref") || "",
+            "Paid At": now,
+            "Variant IDs": row.get("Variant IDs") || "",
+            "Shopify Order ID": row.get("Shopify Order ID") || "",
+            "Size Changed": row.get("Size Changed") || "",
+            "Address Changed": row.get("Address Changed") || "",
+          },
+        };
+      }
+    }
+    return { ok: false, reason: "no_match" };
+  });
 }

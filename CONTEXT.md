@@ -106,7 +106,7 @@ Date, Type (RESERVED/SOLD/RETURNED/RESTOCK), Product, Size, Variant ID, Change, 
 ## กฎสำคัญของระบบ (Business Logic)
 - สต็อกที่โชว์ในเว็บ = Shopify stock − PENDING orders (soft-reserve)
 - Shopify Order สร้างหลังจ่ายเงินเท่านั้น (ไป Orders ตรงๆ ไม่ใช่ Draft)
-- สลิปจับคู่ด้วย LINE userId + ยอดเงิน, กัน transRef ซ้ำ, จับ PENDING เก่าสุดก่อน, tolerance ±0.90
+- สลิปจับคู่ด้วย LINE userId + ยอดเงิน (**ตรงเป๊ะ ไม่มี tolerance**), กัน transRef ซ้ำ, จับ PENDING **ใหม่สุดก่อน** (newest-first) — ทั้งหมดทำใน `claimPaymentForUser()` แบบ atomic (อ่าน-จับคู่-mark PAID ใน critical section เดียวผ่าน `withLock`)
 - Edit ที่อยู่ได้ 1 ครั้ง / Change size ได้ 1 ครั้ง (แยกอิสระ) — ใช้แล้วล็อค (Address Changed / Size Changed = YES)
 - ออเดอร์จัดส่งแล้ว แก้ไม่ได้ทุกอย่าง
 - Auto-cancel: PENDING เกิน 5 นาที → EXPIRED + คืนสต็อก (cron-job.org เรียก /api/check-expired ทุก 1 นาที)
@@ -153,6 +153,23 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
   - `UNIT-01 scope-check (Shopify)` → `/api/scope-check?key=<CRON_SECRET>` ทุกวัน 09:00 (Asia/Bangkok, crontab `0 9 * * *`)
   - helper `pushOwner` ใน `lib/order-sync.ts` ใช้ส่ง LINE หาเจ้าของ — ถ้าได้ LINE เตือน = มีออเดอร์ที่ Sheet กับ Shopify ไม่ตรง ต้องไปแก้มือใน Shopify
   - ยืนยัน endpoint บน production แล้ว: scope-check `ok:true` (scope ครบ), reconcile จับ `#UT-8DW9TX` (ออเดอร์เทสต์ จ่ายแล้วไม่มี Shopify ID) ได้ถูกต้อง
+
+---
+
+## Concurrency / กันแย่งกันเขียน (เสร็จแล้ว — branch `loadtest`)
+เจอ race 3 แบบจาก load test (50 ออเดอร์พร้อมกัน) แก้ด้วย **in-process async mutex** `withLock()` (`lib/sheets.ts`):
+- **`withLock(fn)`** — คิว Promise ตัวเดียว ทำงานทีละใบ (serialize) critical section ทั้งหมด แก้ 3 ปัญหาพร้อมกัน: oversell, ออเดอร์หาย, และ 429 burst (เพราะทีละใบ = throttle ในตัว)
+- **order route → `createOrderGuarded()`** (1 ใบ = อ่าน Orders 1 + Stock 1, เช็ค available = Shopify Stock − committed(PENDING+PAID), แล้วค่อย append + log RESERVED ใน lock เดียว) — สต็อกไม่พอ → ตอบ `409 out_of_stock`, ชีต error/quota → `503 order_busy` (ให้ลูกค้า retry, ไม่สร้างออเดอร์ครึ่งๆ)
+- **webhook (slip) → `claimPaymentForUser()`** — อ่าน Orders 1 + กัน transRef ซ้ำ + จับ PENDING ใหม่สุด (user+ยอดตรงเป๊ะ) + mark PAID ใน lock เดียว ปิด race "สลิปซ้ำ" และ "จ่าย 2 ใบยอดเท่ากันทับ row เดียว" พร้อมกัน
+- ⚠️ **ข้อจำกัด:** เป็น in-process lock — ถ้า Vercel scale หลาย instance lock จะไม่ข้าม instance (reconcile รายวันเป็นตาข่ายจับ race ข้าม instance ที่เหลือ)
+- **bottleneck = Google Sheets quota 60 read + 60 write/นาที** — 20-50 ใบพร้อมกันจะโดน throttle (บางใบได้ 503 ให้ retry) นี่คือเหตุผลหลักที่ควรพิจารณา Shopify inventory hold สำหรับดรอปใหญ่ (ข้างล่าง)
+- **Load test:** `scripts/loadtest/` (รันบน TEST sheet เท่านั้น — `_env.ts` กัน prod id). Test A=write integrity, B=oversell, C=slip dedup/match, D=reserved/available, **E=ยิง HTTP `/api/order` route จริง** (มี safety pre-flight ยืนยัน server ชี้ test sheet ก่อนยิงโหลด). ผลล่าสุด: ออเดอร์ที่ตอบ 200 ลงครบ 100% (0 หาย/0 ทับ), oversell 0, สลิปซ้ำ 2→1, accounting เป๊ะ
+
+### Shopify inventory hold (อนาคต — ยังไม่ทำ, ทางเลือกที่แข็งกว่าสำหรับดรอปใหญ่)
+ตอนนี้สต็อกเป็น **soft-reserve** (นับ PENDING ในชีตเอง) — ดีพอสำหรับวอลุ่มปกติ แต่ผูกกับ Sheets quota และ in-process lock
+- **inventory hold คืออะไร:** ใช้ Shopify จองสต็อกจริงตอนสร้างออเดอร์ (reservation/hold ผ่าน Admin API เช่น `inventorySetQuantities`/draft order reserve) แทนการนับเองในชีต → Shopify เป็น source of truth ตัวเดียว กัน oversell ข้าม instance/ข้ามช่องทางได้จริง (ไม่ต้องพึ่ง in-process lock)
+- **ทำเมื่อไหร่ดี:** ดรอปใหญ่/limited ที่คนแย่งของชิ้นสุดท้ายเยอะมาก, หรือเริ่มขายหลายช่องทาง (เว็บ + หน้าร้าน + IG) ที่ soft-reserve ในชีตเดียวตามไม่ทัน, หรือเมื่อ Vercel ต้อง scale หลาย instance ถาวร
+- **ต้นทุน:** เพิ่ม Shopify API call ต่อออเดอร์ (มี rate limit ของตัวเอง), ต้องจัดการ release hold ตอน EXPIRED/ยกเลิก, และ map hold↔order ในชีต — ซับซ้อนขึ้น จึงเก็บไว้ทำเมื่อสเกลถึงจุดที่จำเป็น
 
 ---
 
