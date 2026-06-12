@@ -61,6 +61,50 @@ function getDoc() {
   return new GoogleSpreadsheet(process.env.GOOGLE_SHEETS_ID!, serviceAccountAuth);
 }
 
+// ── cached workbook handle ─────────────────────────────────────────────────
+// doc.loadInfo() fetches the workbook metadata (list of tabs + each tab's grid
+// size/header pointer) and costs ~900ms. The set of tabs is stable, so the hot
+// order-creation path reuses a loaded doc for a short TTL instead of paying
+// that round-trip on every order.
+//
+// SAFETY — this caches ONLY workbook metadata, never business data:
+//   • Row data (orders, stock levels) is ALWAYS re-read live via getRows() —
+//     the oversell/lost-order math never sees stale rows.
+//   • Each sheet's header row is still re-verified per order (getOrCreateSheet
+//     for Orders; getRows() loads Stock's header itself) — added/renamed COLUMNS
+//     are picked up immediately.
+//   • A deploy = cold start = empty cache, so schema changes that ship with code
+//     are live at once.
+//   • A NEW TAB added in the Sheet UI mid-window is picked up within DOC_TTL_MS,
+//     or instantly if a required tab turns up missing (getReadyDoc self-heals,
+//     see createOrderGuarded), so we never addSheet a tab that already exists.
+const DOC_TTL_MS = 5 * 60 * 1000;
+let _cachedDoc: GoogleSpreadsheet | null = null;
+let _cachedDocAt = 0;
+
+/** Drop the cached workbook handle; next getReadyDoc() reloads metadata. */
+export function invalidateDocCache(): void {
+  _cachedDoc = null;
+  _cachedDocAt = 0;
+}
+
+/**
+ * Return a GoogleSpreadsheet with loadInfo() already done, cached for
+ * DOC_TTL_MS. Pass forceFresh=true to bypass the cache (used to self-heal when
+ * a required tab is unexpectedly absent from the cached metadata).
+ */
+async function getReadyDoc(forceFresh = false): Promise<GoogleSpreadsheet> {
+  const now = Date.now();
+  if (!forceFresh && _cachedDoc && now - _cachedDocAt < DOC_TTL_MS) {
+    return _cachedDoc;
+  }
+  const doc = getDoc();
+  await doc.loadInfo();
+  _cachedDoc = doc;
+  _cachedDocAt = now;
+  return doc;
+}
+
 function nowBKK(): string {
   return new Date().toLocaleString("sv-SE", {
     timeZone: "Asia/Bangkok",
@@ -1071,8 +1115,15 @@ export async function createOrderGuarded(
   lineItems: ReserveLineItem[]
 ): Promise<GuardedOrderResult> {
   return withLock(async () => {
-    const doc = getDoc();
-    await doc.loadInfo();
+    // Reuse the cached workbook metadata (saves a ~900ms loadInfo per order).
+    let doc = await getReadyDoc();
+    // Self-heal: the tabs we write to must be present in the cached metadata
+    // BEFORE any write, otherwise getOrCreateTab could try to addSheet a tab
+    // that actually exists. If the cache predates a tab being added, force one
+    // fresh loadInfo. (Row/stock data is still read live below regardless.)
+    if (!doc.sheetsByTitle["Orders"] || !doc.sheetsByTitle["Stock Log"]) {
+      doc = await getReadyDoc(true);
+    }
     const ordersSheet = await getOrCreateSheet(doc);
 
     // ── committed (PENDING + PAID) per variant — single read of Orders ──
@@ -1093,7 +1144,9 @@ export async function createOrderGuarded(
     const stockSheet = doc.sheetsByTitle["Stock"];
     if (stockSheet) {
       try {
-        await stockSheet.loadHeaderRow();
+        // getRows() loads the header row itself — no separate loadHeaderRow()
+        // round-trip needed (saves ~500ms). On a header-less/empty Stock tab it
+        // throws, caught below → stock stays {} → treated as 0 (same fallback).
         for (const r of await stockSheet.getRows()) {
           const vid = (r.get("Variant ID") || "").trim();
           if (vid) stock[vid] = Number(r.get("Shopify Stock") || 0);

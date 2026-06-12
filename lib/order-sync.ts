@@ -151,3 +151,43 @@ export async function alertOwnerOrderFailed(
     console.error("[order-sync] Failed to push owner alert:", e);
   }
 }
+
+/**
+ * never-silent: the order is created, but pushing the Flex/QR + payment-timeout
+ * messages to the CUSTOMER failed. Since this now runs after the HTTP response
+ * (via `after()`), a failure here would otherwise vanish into the logs — so we
+ * alert the owner that a customer may not have received their QR.
+ */
+export async function alertOwnerNotifyFailed(
+  orderId: string,
+  info: { customer?: string; items?: string; total?: number; phone?: string; lineUserId?: string },
+  reason: string
+): Promise<void> {
+  if (
+    !OWNER_LINE_USER_ID ||
+    !process.env.LINE_CHANNEL_ACCESS_TOKEN ||
+    process.env.LINE_CHANNEL_ACCESS_TOKEN === "YOUR_CHANNEL_ACCESS_TOKEN_HERE"
+  ) {
+    console.error("[order-sync] Cannot alert owner (notify) — missing LINE token / owner id");
+    return;
+  }
+  const text =
+    `⚠️ ส่ง QR/รายละเอียดออเดอร์ให้ลูกค้าไม่สำเร็จ (ออเดอร์สร้างแล้ว)\n\n` +
+    `Order: ${orderId}\n` +
+    `ลูกค้า: ${info.customer || "-"}\n` +
+    `สินค้า: ${info.items || "-"}\n` +
+    `ยอดรวม: ฿${info.total ?? "-"}\n` +
+    `เบอร์: ${info.phone || "-"}\n` +
+    `LINE: ${info.lineUserId || "-"}\n\n` +
+    `⛔️ ลูกค้าอาจยังไม่ได้รับ QR — ติดต่อลูกค้า/ส่ง QR ซ้ำด้วยตนเอง`;
+  try {
+    const cl = getLineClient();
+    await cl.pushMessage({
+      to: OWNER_LINE_USER_ID,
+      messages: [{ type: "text", text }],
+    });
+    console.log("[order-sync] Owner alerted about failed customer notify:", orderId);
+  } catch (e) {
+    console.error("[order-sync] Failed to push owner notify alert:", e);
+  }
+}
