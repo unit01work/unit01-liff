@@ -46,7 +46,8 @@ UNIT-01 = ร้านขายเสื้อสตรีทแวร์ ขา
 | SLIPOK_API_KEY | API key SlipOK |
 | PROMPTPAY_ID | เลขพร้อมเพย์รับเงิน |
 | SHIPPING_FEE | ค่าส่ง (50) |
-| CRON_SECRET | กันคนอื่นเรียก cron endpoints (/api/check-expired, /api/reconcile, /api/scope-check) — ส่งเป็น `Authorization: Bearer <secret>` หรือ `?key=<secret>` |
+| CRON_SECRET | กันคนอื่นเรียก cron endpoints (/api/check-expired, /api/reconcile, /api/scope-check, /api/daily-pull, /api/daily-pull-heartbeat) — ส่งเป็น `Authorization: Bearer <secret>` หรือ `?key=<secret>` |
+| ADMIN_LINE_USER_ID | (ออปชัน) LINE userId รับแจ้งเตือน daily-pull — ไม่ตั้งจะ fallback `OWNER_LINE_USER_ID` |
 
 > ถ้าต้องการค่าจริง: `cat .env.local` หรือดู backup ที่ `Desktop/unit01-liff-backup/02-ENV-VARIABLES/`
 > หมายเหตุ Vercel: ฝั่ง Vercel ใช้ `GOOGLE_PRIVATE_KEY_BASE64` (base64) แทน `GOOGLE_PRIVATE_KEY` และมี `SHOPIFY_CLIENT_SECRET` เพิ่ม
@@ -147,12 +148,25 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 2. **Reconciliation รายวัน — `GET /api/reconcile`** (auth CRON_SECRET): สแกนออเดอร์ PAID ล่าสุด (`?hours=` default 72) เทียบ Sheet ↔ Shopify → ออเดอร์ไม่มี Shopify ID / Shopify หาย / variant(ไซส์)ไม่ตรง / **ที่อยู่ไม่ตรง (address1=Address, address2=Sub-district, zip=Postal — เทียบแบบ normalize trim+lowercase)** / มี Sync Status FAILED → สรุป push LINE ทุกรอบ (รวม " all clear"). `?silent=1` = ไม่ push. ฟังก์ชัน: `findRecentPaidOrders` (sheets), `getShopifyOrderSnapshot` (shopify, ใช้ `current_quantity` สะท้อน order-edit, คืน `shippingAddress1/2/Zip` ด้วย). **หมายเหตุ:** การเทียบที่อยู่นี้คือจุดสำคัญ — ก่อนหน้านี้ reconcile เทียบแค่ไซส์ เลยจับ "แก้ที่อยู่ในชีตแล้วไม่เข้า Shopify" ไม่ได้ (เคส thishar)
 3. **Scope health check — `GET /api/scope-check`** (auth CRON_SECRET): เช็ค token มี scope ครบตาม `REQUIRED_SHOPIFY_SCOPES` (`read_products, read_inventory, write_draft_orders, write_orders, write_order_edits`) ขาด → push LINE แจ้งทันที (กันเคส scope หายเหมือน `write_order_edits`). reconcile ก็เรียกเช็ค scope ในตัวด้วย
 4. **Smoke test ก่อนขาย:** (ยังไม่ทำเป็นสคริปต์ถาวร — รันทดสอบ manual)
-- **cron บน cron-job.org (ตั้งแล้ว ✅):** บัญชี cron-job.org มี 3 งาน:
+- **cron บน cron-job.org (ตั้งแล้ว ✅):** บัญชี cron-job.org มี 5 งาน:
   - `UNIT-01 auto-cancel orders` → `/api/check-expired` ทุก 1 นาที
   - `UNIT-01 reconcile (Sheet↔Shopify)` → `/api/reconcile?key=<CRON_SECRET>` ทุกวัน 09:00 (Asia/Bangkok, crontab `0 9 * * *`)
   - `UNIT-01 scope-check (Shopify)` → `/api/scope-check?key=<CRON_SECRET>` ทุกวัน 09:00 (Asia/Bangkok, crontab `0 9 * * *`)
+  - `UNIT-01 daily pull` (jobId 7799747) → `/api/daily-pull?key=<CRON_SECRET>` ทุกวัน 10:00 (Asia/Bangkok)
+  - `UNIT-01 heartbeat` (jobId 7799750) → `/api/daily-pull-heartbeat?key=<CRON_SECRET>` ทุกวัน 10:30 (Asia/Bangkok)
   - helper `pushOwner` ใน `lib/order-sync.ts` ใช้ส่ง LINE หาเจ้าของ — ถ้าได้ LINE เตือน = มีออเดอร์ที่ Sheet กับ Shopify ไม่ตรง ต้องไปแก้มือใน Shopify
   - ยืนยัน endpoint บน production แล้ว: scope-check `ok:true` (scope ครบ), reconcile จับ `#UT-8DW9TX` (ออเดอร์เทสต์ จ่ายแล้วไม่มี Shopify ID) ได้ถูกต้อง
+
+---
+
+## Daily Pull Worklist (เสร็จแล้ว — merge + ขึ้น production แล้ว 2026-06-12)
+ระบบดึงออเดอร์ประจำวันลงชีตเป็นรายการแพ็คของ (worklist) — โมดูลแยกตัวเอง (`app/api/daily-pull*`, `lib/daily-pull/*`) **ไม่ import core lib** (sheets/shopify ของ sales loop) เพื่อให้ลบทั้งก้อนได้ ไม่กระทบระบบขาย
+- **`GET/POST /api/daily-pull`** (auth CRON_SECRET): ทุกวัน 10:00 ICT ดึงออเดอร์ **PAID + UNFULFILLED** ในหน้าต่าง 24 ชม. (เมื่อวาน 10:00 → วันนี้ 10:00, ตัดที่ 10:00:00 เป๊ะตาม paid timestamp) → เขียนแท็บใหม่ต่อวันในชีตเดิม "UNIT-01 Orders" (ชื่อแท็บ `WL-YYYY-MM-DD`, 11 คอลัมน์ไทย) → reconcile เทียบ re-pull → tag `worklisted` กันดึงซ้ำ → แจ้ง carry-over แยก → รายงานทุกสเตปเป็นไทยทาง LINE (ไม่มี emoji)
+- **`GET /api/daily-pull-heartbeat`** (auth CRON_SECRET): 10:30 ICT เช็คว่าแท็บ `WL-วันนี้` มีไหม — ไม่มี = รอบ 10:00 ไม่ทำงาน → push LINE เตือนด่วน. แท็บว่าง (0 ออเดอร์) ยังนับว่า "ทำงานแล้ว" → วันเงียบไม่ false-alarm
+- **window logic** (`lib/daily-pull/window.ts`): CUTOFF_HOUR=10 ICT (=03:00 UTC), `isInWindow`/`isCarryOver`. paidAt = transaction SUCCESS SALE/CAPTURE processedAt ตัวแรกสุด (fallback createdAt)
+- **idempotency:** tag `worklisted` ผ่าน `tagsAdd` — รอบถัดไปดึงด้วย `-tag:worklisted` ไม่ดึงซ้ำ (Shopify search index มี lag หลัง tag นิดหน่อย). **regen** (เรียกซ้ำด้วย `?date=`) ดึงทุกอันรวมที่ tag แล้ว + เขียนทับแท็บเดิม (stable gid)
+- **reconcile/verify ต้อง mirror การ exclude worklisted ของ pull หลัก** (`excludeWorklisted: !isRegen`) — ไม่งั้นออเดอร์ที่ tag แล้วจะถูก re-pull, ถูกมองว่า "หาย", แล้ว auto-fix เอากลับเข้าชีต (บั๊กนี้แก้แล้ว commit e933a52)
+- ตั้ง cron 2 งานบน cron-job.org แล้ว (ดู Monitoring/Guards). ตัวแปร LINE ปลายทาง: `ADMIN_LINE_USER_ID` (fallback `OWNER_LINE_USER_ID`)
 
 ---
 
@@ -193,7 +207,7 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 ---
 
 ## สถานะระบบ (อัพเดทล่าสุด)
-**เสร็จแล้ว:** LIFF shop ดึง Shopify, order→Sheets, returning customer auto-fill, Flex+QR, SlipOK→PAID, Shopify Order auto-create, Thai zip auto-fill, Contact Us ครบ, lock system, pre-order/reorder flow, auto-cancel 5 นาที (cron-job.org), backup folder, GitHub auto-deploy, **Stock + Stock Log tabs**, **UI patch รอบ 1-3 (Products/Checkout/Edit) + หัวสินค้าบาร์โค้ดสแตมป์ + Patch 03 (Cart UI: ปุ่ม gradient/เทา, ลบ IMAGE/LOT) + สีสินค้าจาก metafield `custom.color_line` + รูปสินค้าหลายรูป (carousel swipe + dots) + Size Guide จาก metafield `custom.sizechart` (เปิด modal ในหน้าเดิม) + รูปสินค้า object-fit contain (ไม่ crop) + เรียง size S→M→L→XL (helper กลาง ใช้ทั้ง LIFF + Stock tab)** + **normalize เบอร์ +66 ทั้งตอนสร้าง+แก้ที่อยู่ + กันเงียบหายทุกจุด (สร้าง/change size/edit shipping → LINE alert + FAILED/Sync Status) + change size ต้องมี scope `write_order_edits` + Reconciliation cron (/api/reconcile) + Scope health check (/api/scope-check) + ตั้ง cron-job.org รายวัน 09:00 ครบทั้ง reconcile+scope-check** + **UI patch รอบ 4: Checkout (ShippingForm) ตัดหัวซ้ำ — เหลือ `03 ◦ SHIPPING DETAILS` บรรทัดเดียว (ลบ `// STEP 03/03` 2 บรรทัด + bracket row ใต้ progress) · Cart รูปสินค้าใช้ `object-fit: contain` พื้น `C.cream` (ไม่ crop ไม่มีแถบดำ เหมือนหน้า shop)** + **Concurrency mutex (createOrderGuarded + claimPaymentForUser, กัน oversell/ออเดอร์หาย/สลิปซ้ำ) + Loading screen ตอน CHECKOUT (CREATING YOUR ORDER + error 409/503/อื่นๆ) — ขึ้น production แล้ว 2026-06-12**
+**เสร็จแล้ว:** LIFF shop ดึง Shopify, order→Sheets, returning customer auto-fill, Flex+QR, SlipOK→PAID, Shopify Order auto-create, Thai zip auto-fill, Contact Us ครบ, lock system, pre-order/reorder flow, auto-cancel 5 นาที (cron-job.org), backup folder, GitHub auto-deploy, **Stock + Stock Log tabs**, **UI patch รอบ 1-3 (Products/Checkout/Edit) + หัวสินค้าบาร์โค้ดสแตมป์ + Patch 03 (Cart UI: ปุ่ม gradient/เทา, ลบ IMAGE/LOT) + สีสินค้าจาก metafield `custom.color_line` + รูปสินค้าหลายรูป (carousel swipe + dots) + Size Guide จาก metafield `custom.sizechart` (เปิด modal ในหน้าเดิม) + รูปสินค้า object-fit contain (ไม่ crop) + เรียง size S→M→L→XL (helper กลาง ใช้ทั้ง LIFF + Stock tab)** + **normalize เบอร์ +66 ทั้งตอนสร้าง+แก้ที่อยู่ + กันเงียบหายทุกจุด (สร้าง/change size/edit shipping → LINE alert + FAILED/Sync Status) + change size ต้องมี scope `write_order_edits` + Reconciliation cron (/api/reconcile) + Scope health check (/api/scope-check) + ตั้ง cron-job.org รายวัน 09:00 ครบทั้ง reconcile+scope-check** + **UI patch รอบ 4: Checkout (ShippingForm) ตัดหัวซ้ำ — เหลือ `03 ◦ SHIPPING DETAILS` บรรทัดเดียว (ลบ `// STEP 03/03` 2 บรรทัด + bracket row ใต้ progress) · Cart รูปสินค้าใช้ `object-fit: contain` พื้น `C.cream` (ไม่ crop ไม่มีแถบดำ เหมือนหน้า shop)** + **Concurrency mutex (createOrderGuarded + claimPaymentForUser, กัน oversell/ออเดอร์หาย/สลิปซ้ำ) + Loading screen ตอน CHECKOUT (CREATING YOUR ORDER + error 409/503/อื่นๆ) — ขึ้น production แล้ว 2026-06-12** + **Daily Pull Worklist (ดึงออเดอร์ PAID+UNFULFILLED ราย 24 ชม. → แท็บ `WL-วันที่` ในชีตเดิม + reconcile + tag worklisted กันซ้ำ + carry-over + รายงาน LINE ไทย + heartbeat 10:30) + ตั้ง cron-job.org 10:00/10:30 — ขึ้น production แล้ว 2026-06-12**
 **กำลังทำ:** —
 **รอทำ:** Finance/REVENUE เชื่อม, Platform Fee, ต้นทุน/กำไร, Admin Dashboard, Custom Domain, Rich Menu เต็มรูปแบบ
 
