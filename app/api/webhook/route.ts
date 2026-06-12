@@ -32,6 +32,13 @@ import {
   buildContactMenuNoOrder,
   buildSelectOrderFlex,
 } from "@/lib/flex-messages";
+import {
+  computeEditDeadline,
+  formatDeadline,
+  isEditLocked,
+  buildLockedMessage,
+  nowBKK,
+} from "@/lib/edit-lock";
 
 const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}`;
 
@@ -84,14 +91,31 @@ function defaultReply() {
 }
 
 /* ── Slip verification reply messages ── */
-function replyConfirmPayment(orderId: string, amount: number) {
+// Post-payment (CF) confirmation — sent as TWO separate messages:
+//   msg1 = order-number confirmation + brand line
+//   msg2 = per-order edit deadline + "edit once" rule
+function replyConfirmPayment(orderId: string, amount: number, paidAt: string) {
   const id = orderId.startsWith("#") ? orderId : `#${orderId}`;
-  return [
+  const deadline = formatDeadline(computeEditDeadline(paidAt));
+  const messages: { type: "text"; text: string }[] = [
     {
       type: "text" as const,
       text: `ORDER CONFIRMED\n${id} · ฿${amount.toLocaleString()}\n\nPREPARING FOR DISPATCH.\nYOUR FIRST UNIT. USE IT WELL.`,
     },
   ];
+  // Only attach the deadline block if we could compute one (always, for a
+  // freshly-paid order — paidAt is "now"). Fail-safe: skip if missing.
+  if (deadline) {
+    messages.push({
+      type: "text" as const,
+      text:
+        `You can still edit your shipping address or size until:\n\n` +
+        `${deadline}\n\n` +
+        `Each order can be edited once only.\n` +
+        `After this time, your order is locked for shipping.`,
+    });
+  }
+  return messages;
 }
 
 function replyNoMatchingOrder(amount: number) {
@@ -183,8 +207,9 @@ async function handleSlipImage(
       );
     }
 
-    // 8. Return confirmation
-    return replyConfirmPayment(orderId, amount);
+    // 8. Return confirmation (deadline computed from the just-set Paid At;
+    //    fall back to "now" so the deadline block is always present)
+    return replyConfirmPayment(orderId, amount, order["Paid At"] || nowBKK());
   } catch (err) {
     console.error("[slip] Error processing slip:", err);
     return replyInvalidSlip();
@@ -203,6 +228,11 @@ async function handleContact(orderId: string) {
 async function handleChangeSize(orderId: string) {
   const order = await getOrder(orderId);
   if (!order) return [{ type: "text" as const, text: "Order not found." }];
+
+  // Time-lock takes precedence: past 10:00 deadline → no edits at all.
+  if (isEditLocked(order)) {
+    return [{ type: "text" as const, text: buildLockedMessage(orderId) }];
+  }
 
   // Check if already changed
   if (order["Size Changed"] === "YES") {
@@ -309,6 +339,12 @@ async function handleChangeSize(orderId: string) {
 async function handleSelectSize(orderId: string, newSize: string, newVariantId: string) {
   const order = await getOrder(orderId);
   if (!order) return [{ type: "text" as const, text: "Order not found." }];
+
+  // Time-lock takes precedence: re-check at commit time (defense in depth — the
+  // customer may have crossed 10:00 between opening the size picker and tapping).
+  if (isEditLocked(order)) {
+    return [{ type: "text" as const, text: buildLockedMessage(orderId) }];
+  }
 
   // Check if already changed
   if (order["Size Changed"] === "YES") {
@@ -573,6 +609,11 @@ async function handleSelectOrder(orderId: string, nextAction: string) {
       // Check lock
       const order = await getOrder(orderId);
       const displayId = `#${orderId.replace("#", "")}`;
+      // Time-lock takes precedence: past 10:00 deadline the order is being
+      // prepared for shipping and cannot be edited at all.
+      if (order && isEditLocked(order)) {
+        return [{ type: "text" as const, text: buildLockedMessage(orderId) }];
+      }
       if (order?.["Address Changed"] === "YES") {
         return [{
           type: "text" as const,
