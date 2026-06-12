@@ -160,7 +160,7 @@ export async function POST(request: NextRequest) {
             to: body.lineUserId,
             messages: [{
               type: "text",
-              text: "Please complete payment within 5 minutes.\nYour order will be automatically cancelled if no payment is received.",
+              text: "[ ! ] Pay within 5 minutes, or your order is cancelled.",
             }],
           });
           console.log("Flex Message sent (after response):", orderId);

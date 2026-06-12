@@ -43,10 +43,10 @@ import {
 const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}`;
 
 /* ── keyword maps ── */
-const SHOP_KEYWORDS = ["สั่งซื้อ", "shop", "ซื้อ", "สินค้า", "ร้าน", "เปิดร้าน", "order"];
-const STATUS_KEYWORDS = ["สถานะ", "status", "ออเดอร์", "คำสั่งซื้อ"];
+// Catalog / Contact Us keyword auto-replies are configured separately in the
+// LINE Official Account console (owner-managed) — not handled here. We keep the
+// Contact menu trigger so "contact us" still opens the in-chat support menu.
 const CONTACT_KEYWORDS = ["contact", "ติดต่อ", "contact us"];
-const HELP_KEYWORDS = ["help", "ช่วย", "วิธี", "menu", "เมนู"];
 
 function matchKeyword(text: string, keywords: string[]): boolean {
   const lower = text.toLowerCase().trim();
@@ -54,38 +54,22 @@ function matchKeyword(text: string, keywords: string[]): boolean {
 }
 
 /* ── reply builders ── */
-function shopReply() {
+// Single fallback for any inbound text/sticker that matches no configured
+// keyword. The "how to order" URL must stay tappable in LINE: keep a space
+// between the decorative bracket and the URL so link-detection captures only
+// the URL itself.
+function fallbackReply() {
   return [
     {
       type: "text" as const,
-      text: `🛍️ UNIT-01 Shop\n\nกดลิงก์ด้านล่างเพื่อเปิดร้านค้าและสั่งซื้อสินค้าได้เลยครับ\n\n👉 ${LIFF_URL}`,
-    },
-  ];
-}
-
-function statusReply() {
-  return [
-    {
-      type: "text" as const,
-      text: `📦 ตรวจสอบสถานะ\n\nหากต้องการเช็คสถานะออเดอร์ กรุณาแจ้งหมายเลขออเดอร์ (เช่น #UT-XXXXXX) มาได้เลยครับ\n\nหรือหากส่งสลิปแล้ว รอทีมงานตรวจสอบภายใน 24 ชม. ครับ`,
-    },
-  ];
-}
-
-function helpReply() {
-  return [
-    {
-      type: "text" as const,
-      text: `📋 UNIT-01 Menu\n\n🛍️ พิมพ์ "สั่งซื้อ" — เปิดร้านค้า\n📦 พิมพ์ "สถานะ" — เช็คสถานะออเดอร์\n🖼️ ส่งรูปสลิป — แจ้งชำระเงิน\n\nหรือกดลิงก์เปิดร้าน:\n👉 ${LIFF_URL}`,
-    },
-  ];
-}
-
-function defaultReply() {
-  return [
-    {
-      type: "text" as const,
-      text: `สวัสดีครับ ยินดีต้อนรับสู่ UNIT-01 🖤\n\nพิมพ์ "สั่งซื้อ" เพื่อเปิดร้านค้า\nพิมพ์ "สถานะ" เพื่อเช็คออเดอร์\nหรือพิมพ์ "เมนู" เพื่อดูคำสั่งทั้งหมด`,
+      text:
+        `UNIT-01\n\n` +
+        `Tap the menu below to get started.\n` +
+        `If you can't find what you need:\n\n` +
+        `How to order\n` +
+        `[ https://liff.line.me/2010192572-jfj8ev6c ]\n\n` +
+        `View our products — type [ Catalog ]\n` +
+        `Reach our team — type [ Contact Us ]`,
     },
   ];
 }
@@ -100,7 +84,7 @@ function replyConfirmPayment(orderId: string, amount: number, paidAt: string) {
   const messages: { type: "text"; text: string }[] = [
     {
       type: "text" as const,
-      text: `ORDER CONFIRMED\n${id} · ฿${amount.toLocaleString()}\n\nPREPARING FOR DISPATCH.\nYOUR FIRST UNIT. USE IT WELL.`,
+      text: `ORDER CONFIRMED [ Paid ]\n${id} · ฿${amount}\n\nYOUR FIRST UNIT. USE IT WELL.`,
     },
   ];
   // Only attach the deadline block if we could compute one (always, for a
@@ -122,7 +106,7 @@ function replyNoMatchingOrder(amount: number) {
   return [
     {
       type: "text" as const,
-      text: `⚠️ ไม่พบออเดอร์ที่ตรงกับยอดโอน ฿${amount.toLocaleString()}\n\nกรุณาตรวจสอบยอดเงินอีกครั้ง\nหรือติดต่อร้านค้าเพื่อตรวจสอบ`,
+      text: `[ ! ] NO MATCHING ORDER\n฿${amount}\n\nNo order matches this transfer.\nVerify the amount, or type [ Contact Us ] to reach us.`,
     },
   ];
 }
@@ -131,7 +115,7 @@ function replyInvalidSlip() {
   return [
     {
       type: "text" as const,
-      text: `❌ ไม่สามารถตรวจสอบสลิปได้\n\nกรุณาส่งรูปสลิปที่ชัดเจน\nโดยต้องเห็น QR Code บนสลิปครบถ้วน`,
+      text: `[ x ] SLIP NOT VERIFIED\n\nWe could not verify this slip.\nResend a clear image with the full QR code visible,\nor type [ Contact Us ] if the problem persists.`,
     },
   ];
 }
@@ -140,7 +124,7 @@ function replyDuplicateSlip() {
   return [
     {
       type: "text" as const,
-      text: `⚠️ สลิปนี้เคยใช้ยืนยันแล้ว\n\nกรุณาส่งสลิปใบใหม่`,
+      text: `[ ! ] SLIP ALREADY USED\n\nThis slip has already been used to confirm a payment.\nPlease send a new slip, or type [ Contact Us ] if you believe this is an error.`,
     },
   ];
 }
@@ -239,7 +223,7 @@ async function handleChangeSize(orderId: string) {
     const displayId = `#${orderId.replace("#", "")}`;
     return [{
       type: "text" as const,
-      text: `Size for order ${displayId} has already been changed.\nPlease contact our team for further changes.`,
+      text: `Size for order ${displayId} has already been changed.\nType [ Contact Us ] for further changes.`,
     }];
   }
 
@@ -247,7 +231,7 @@ async function handleChangeSize(orderId: string) {
   const itemsStr = order["Items"] || "";
   const itemMatch = itemsStr.match(/^(.+?)\s*\((\w+)\)\s*x(\d+)/);
   if (!itemMatch) {
-    return [{ type: "text" as const, text: "Unable to determine current size." }];
+    return [{ type: "text" as const, text: "[ x ] Unable to read current size.\nType [ Contact Us ]." }];
   }
   const productName = itemMatch[1].trim();
   const currentSize = itemMatch[2];
@@ -256,7 +240,7 @@ async function handleChangeSize(orderId: string) {
   const variantIds = order["Variant IDs"] || "";
   const currentVariantId = variantIds.split(":")[0];
   if (!currentVariantId) {
-    return [{ type: "text" as const, text: "No variant information found." }];
+    return [{ type: "text" as const, text: "[ x ] Size information unavailable.\nType [ Contact Us ]." }];
   }
 
   // Find the product ID from Shopify using the variant
@@ -268,7 +252,7 @@ async function handleChangeSize(orderId: string) {
     }
   );
   if (!productsRes.ok) {
-    return [{ type: "text" as const, text: "Unable to check available sizes." }];
+    return [{ type: "text" as const, text: "[ x ] Unable to check available sizes.\nType [ Contact Us ]." }];
   }
   const productsData = await productsRes.json();
   // Stable order: sort by product id ascending (consistency with LIFF + Stock tab).
@@ -282,7 +266,7 @@ async function handleChangeSize(orderId: string) {
     p.variants?.some((v: any) => String(v.id) === currentVariantId)
   );
   if (!product) {
-    return [{ type: "text" as const, text: "Product not found in store." }];
+    return [{ type: "text" as const, text: "[ x ] Product not found.\nType [ Contact Us ]." }];
   }
 
   // Get available sizes (in stock, not current size)
@@ -296,7 +280,7 @@ async function handleChangeSize(orderId: string) {
   if (availableSizes.length === 0) {
     return [{
       type: "text" as const,
-      text: `No other sizes available for ${productName}.\nPlease chat with our team.`,
+      text: `No other sizes available for ${productName}.\nType [ Contact Us ].`,
     }];
   }
 
@@ -351,7 +335,7 @@ async function handleSelectSize(orderId: string, newSize: string, newVariantId: 
     const displayId = `#${orderId.replace("#", "")}`;
     return [{
       type: "text" as const,
-      text: `Size for order ${displayId} has already been changed.\nPlease contact our team for further changes.`,
+      text: `Size for order ${displayId} has already been changed.\nType [ Contact Us ] for further changes.`,
     }];
   }
 
@@ -380,7 +364,7 @@ async function handleSelectSize(orderId: string, newSize: string, newVariantId: 
     if (targetVariant && targetVariant.inventory_quantity <= 0) {
       return [{
         type: "text" as const,
-        text: `Size ${newSize} is currently out of stock.\nPlease select another size or chat with our team.`,
+        text: `Size ${newSize} is currently out of stock.\nSelect another size, or type [ Contact Us ].`,
       }];
     }
   }
@@ -518,7 +502,7 @@ async function handleTrackOrder(orderId: string) {
 function handleChatTeam() {
   return [{
     type: "text" as const,
-    text: "Please type your message.\nOur team will reply shortly.",
+    text: "Please type your message.\nWe'll reply shortly.",
   }];
 }
 
@@ -617,7 +601,7 @@ async function handleSelectOrder(orderId: string, nextAction: string) {
       if (order?.["Address Changed"] === "YES") {
         return [{
           type: "text" as const,
-          text: `Shipping address for order ${displayId} has already been edited.\nPlease contact our team for further changes.`,
+          text: `Shipping address for order ${displayId} has already been edited.\nType [ Contact Us ] for further changes.`,
         }];
       }
       const cleanId = orderId.replace("#", "");
@@ -625,7 +609,7 @@ async function handleSelectOrder(orderId: string, nextAction: string) {
       return [
         {
           type: "text" as const,
-          text: `${displayId}\n\nThis is your only chance to edit shipping address.\nPlease make sure all details are correct.`,
+          text: `[ ! ] EDIT SHIPPING ADDRESS — ONCE ONLY\n${displayId}\n\nThis is your only edit. It cannot be changed again.\nCheck every detail before you confirm.`,
         },
         {
           type: "text" as const,
@@ -673,7 +657,7 @@ export async function POST(request: NextRequest) {
           const did = eo["Order ID"].startsWith("#") ? eo["Order ID"] : `#${eo["Order ID"]}`;
           await cl.pushMessage({
             to: eo["LINE User ID"],
-            messages: [{ type: "text", text: `Your order ${did} has been cancelled\ndue to payment timeout.\n\nPlease place a new order if you'd like to purchase.` }],
+            messages: [{ type: "text", text: `[ x ] ORDER CANCELLED\n${did}\n\nPayment timed out. Please place a new order.` }],
           }).catch(() => {});
         }
       }
@@ -755,17 +739,12 @@ export async function POST(request: NextRequest) {
       if (event.message.type === "text") {
         const text: string = event.message.text;
 
-        if (matchKeyword(text, SHOP_KEYWORDS)) {
-          messages = shopReply();
-        } else if (matchKeyword(text, CONTACT_KEYWORDS)) {
+        if (matchKeyword(text, CONTACT_KEYWORDS)) {
           // From Rich Menu — send Contact menu without order ID
           messages = [buildContactMenuNoOrder()];
-        } else if (matchKeyword(text, STATUS_KEYWORDS)) {
-          messages = statusReply();
-        } else if (matchKeyword(text, HELP_KEYWORDS)) {
-          messages = helpReply();
         } else {
-          messages = defaultReply();
+          // No configured keyword matched → single fallback
+          messages = fallbackReply();
         }
       } else if (event.message.type === "image") {
         // Customer sent an image — verify as payment slip
@@ -774,7 +753,7 @@ export async function POST(request: NextRequest) {
         messages = await handleSlipImage(messageId, userId);
       } else {
         // Sticker, video, audio, etc.
-        messages = defaultReply();
+        messages = fallbackReply();
       }
 
       try {

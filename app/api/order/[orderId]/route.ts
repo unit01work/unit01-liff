@@ -115,7 +115,7 @@ export async function PUT(
             to: existingOrder["LINE User ID"],
             messages: [{
               type: "text",
-              text: "Please complete payment within 5 minutes.\nYour order will be automatically cancelled if no payment is received.",
+              text: "[ ! ] Pay within 5 minutes, or your order is cancelled.",
             }],
           });
         } catch (lineErr) {
