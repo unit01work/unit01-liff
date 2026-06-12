@@ -10,7 +10,7 @@
  */
 import "./_env";
 import { appendOrder } from "../../lib/sheets";
-import { clearTab, tab, runConcurrent, banner, fmtStats } from "./_util";
+import { clearTab, readRows, runConcurrent, banner, fmtStats, sleep } from "./_util";
 
 const N = Number(process.argv[2]) || 50;
 
@@ -41,10 +41,13 @@ async function main() {
   const { stats } = await runConcurrent(N, (i) => appendOrder(order(i)));
   console.log(fmtStats("append", stats));
 
+  // Let the per-minute quota window recover before our verification reads.
+  console.log("   …settling 60s for quota window before integrity read");
+  await sleep(60000);
+
   // Integrity check: re-read and confirm exactly the rows that succeeded exist,
   // each unique, none corrupted.
-  const s = await tab("Orders");
-  const rows = await s.getRows();
+  const rows = await readRows("Orders");
   const ids = rows.map((r) => r.get("Order ID")).filter(Boolean);
   const unique = new Set(ids);
   const corrupted = rows.filter(

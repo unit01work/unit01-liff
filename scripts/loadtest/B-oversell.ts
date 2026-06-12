@@ -14,7 +14,7 @@
  */
 import "./_env";
 import { appendOrder, createOrderGuarded, type ReserveLineItem } from "../../lib/sheets";
-import { seedStock, clearTab, tab, runConcurrent, banner } from "./_util";
+import { seedStock, clearTab, readRows, runConcurrent, banner, sleep } from "./_util";
 
 const N = Number(process.argv[2]) || 50;
 const STOCK = Number(process.argv[3]) || 1;
@@ -44,8 +44,7 @@ const lineItems = (): ReserveLineItem[] => [
 ];
 
 async function countPending(): Promise<number> {
-  const s = await tab("Orders");
-  const rows = await s.getRows();
+  const rows = await readRows("Orders");
   return rows.filter(
     (r) =>
       (r.get("Status") || "").toUpperCase() === "PENDING" &&
@@ -60,6 +59,8 @@ async function main() {
   await seedStock([{ product: "RACE TEE", size: "M", variantId: VID, stock: STOCK }]);
   await clearTab("Orders");
   const base = await runConcurrent(N, (i) => appendOrder(order(i, "B")));
+  console.log("   …settling 60s for quota window before counting");
+  await sleep(60000);
   const baseSold = await countPending();
   const baseOversell = Math.max(0, baseSold - STOCK);
   console.log(
@@ -68,6 +69,8 @@ async function main() {
   );
 
   // ── FIXED (createOrderGuarded with locked stock check) ──
+  console.log("   …settling 60s before fixed phase");
+  await sleep(60000);
   await seedStock([{ product: "RACE TEE", size: "M", variantId: VID, stock: STOCK }]);
   await clearTab("Orders");
   const fixed = await runConcurrent(N, async (i) => {
@@ -75,6 +78,8 @@ async function main() {
     if (!res.ok) throw new Error(res.reason); // rejected = "sold out" (expected)
     return res;
   });
+  console.log("   …settling 60s for quota window before counting");
+  await sleep(60000);
   const fixSold = await countPending();
   const fixOversell = Math.max(0, fixSold - STOCK);
   const rejected = fixed.stats.failed - fixed.stats.rateLimited;

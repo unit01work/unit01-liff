@@ -18,16 +18,16 @@ import * as dotenv from "dotenv";
 
 const ROOT = resolve(__dirname, "../..");
 
-function parseEnvFile(name: string): Record<string, string> {
+function parseEnvFile(absPath: string): Record<string, string> {
   try {
-    return dotenv.parse(readFileSync(resolve(ROOT, name)));
+    return dotenv.parse(readFileSync(absPath));
   } catch {
     return {};
   }
 }
 
-const prodEnv = parseEnvFile(".env.local");
-const testEnv = parseEnvFile(".env.test.local");
+const prodEnv = parseEnvFile(resolve(ROOT, ".env.local"));
+const testEnv = parseEnvFile(resolve(__dirname, ".env.test.local"));
 
 const PROD_SHEET_ID = (prodEnv.GOOGLE_SHEETS_ID || "").trim();
 const TEST_SHEET_ID = (testEnv.TEST_SHEET_ID || "").trim();

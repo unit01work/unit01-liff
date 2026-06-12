@@ -16,6 +16,37 @@ function getPrivateKey(): string {
   return raw.includes("\\n") ? raw.split("\\n").join("\n") : raw;
 }
 
+export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function isQuota(e: unknown): boolean {
+  const m = e instanceof Error ? e.message : String(e);
+  return /429|quota|rate limit|RESOURCE_EXHAUSTED|Too Many Requests/i.test(m);
+}
+
+/**
+ * Retry a harness-bookkeeping operation (seed / clear / verify) through Google
+ * Sheets quota 429s. The per-minute quota resets on a sliding window, so we
+ * back off in ~quota-window steps. NOTE: this is ONLY for the harness's own
+ * accounting reads — the measured appendOrder() calls are never retried, so the
+ * throughput / 429 numbers they produce stay honest.
+ */
+export async function withRetry<T>(fn: () => Promise<T>, label = "op"): Promise<T> {
+  const waits = [8000, 20000, 35000, 45000, 60000];
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= waits.length; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (!isQuota(e) || attempt === waits.length) throw e;
+      const w = waits[attempt];
+      console.log(`   …${label} hit quota, backing off ${w / 1000}s (attempt ${attempt + 1})`);
+      await sleep(w);
+    }
+  }
+  throw lastErr;
+}
+
 let _doc: GoogleSpreadsheet | null = null;
 export async function rawDoc(): Promise<GoogleSpreadsheet> {
   if (_doc) return _doc;
@@ -25,7 +56,7 @@ export async function rawDoc(): Promise<GoogleSpreadsheet> {
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
   const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEETS_ID!, auth);
-  await doc.loadInfo();
+  await withRetry(() => doc.loadInfo(), "loadInfo");
   _doc = doc;
   return doc;
 }
@@ -34,14 +65,20 @@ export async function tab(title: string): Promise<GoogleSpreadsheetWorksheet> {
   const doc = await rawDoc();
   const s = doc.sheetsByTitle[title];
   if (!s) throw new Error(`Tab "${title}" not found — run 00-clone-sheet.ts first`);
-  await s.loadHeaderRow();
+  await withRetry(() => s.loadHeaderRow(), "loadHeaderRow");
   return s;
+}
+
+/** Read all data rows of a tab, resilient to quota 429s. */
+export async function readRows(title: string) {
+  const s = await tab(title);
+  return withRetry(() => s.getRows(), "getRows");
 }
 
 /** Delete every data row of a tab (keeps the header row). */
 export async function clearTab(title: string): Promise<void> {
   const s = await tab(title);
-  await s.clearRows().catch(() => {});
+  await withRetry(() => s.clearRows(), "clearRows").catch(() => {});
 }
 
 /** Seed the Stock tab with one variant at a controlled Shopify Stock level. */
@@ -49,9 +86,9 @@ export async function seedStock(
   rows: { product: string; size: string; variantId: string; stock: number }[]
 ): Promise<void> {
   const s = await tab("Stock");
-  await s.clearRows().catch(() => {});
+  await withRetry(() => s.clearRows(), "seed.clear").catch(() => {});
   if (rows.length === 0) return;
-  await s.addRows(
+  await withRetry(() => s.addRows(
     rows.map((r) => ({
       "Product": r.product,
       "Size": r.size,
@@ -62,7 +99,7 @@ export async function seedStock(
       "Sold": 0,
       "Last Updated": new Date().toISOString(),
     }))
-  );
+  ), "seed.add");
 }
 
 export interface RunStats {

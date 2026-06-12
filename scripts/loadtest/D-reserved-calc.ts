@@ -11,7 +11,7 @@
  */
 import "./_env";
 import { appendOrder, updateOrderStatus } from "../../lib/sheets";
-import { seedStock, clearTab, tab, runConcurrent, banner } from "./_util";
+import { seedStock, clearTab, readRows, banner, sleep, withRetry } from "./_util";
 
 const PENDING = Number(process.argv[2]) || 20;
 const PAID = Number(process.argv[3]) || 10;
@@ -40,8 +40,7 @@ function order(i: number) {
 
 async function recompute() {
   // Mirror refreshStockTab's per-variant counting (Reserved=PENDING, Sold=PAID).
-  const s = await tab("Orders");
-  const rows = await s.getRows();
+  const rows = await readRows("Orders");
   let reserved = 0;
   let sold = 0;
   for (const row of rows) {
@@ -59,14 +58,23 @@ async function main() {
   await clearTab("Orders");
 
   const total = PENDING + PAID;
-  // Concurrently create all orders.
-  await runConcurrent(total, (i) => appendOrder(order(i)));
-  // Mark the first PAID of them PAID (sequential to avoid the dedup race — that
-  // race is covered by Test C; here we only validate counting).
-  for (let i = 0; i < PAID; i++) {
-    await updateOrderStatus(`#LT-D${String(i).padStart(3, "0")}`, "PAID", `ref-D-${i}`);
+  // Seed throttled + sequential so EVERY row lands — D isolates the COUNTING
+  // logic (Reserved/Sold/Available math), not the write race (that's Test A/B).
+  console.log(`   …seeding ${total} orders (throttled)`);
+  for (let i = 0; i < total; i++) {
+    await withRetry(() => appendOrder(order(i)), `seed#${i}`);
+    await sleep(1300);
   }
-
+  // Mark the first PAID of them PAID.
+  for (let i = 0; i < PAID; i++) {
+    await withRetry(
+      () => updateOrderStatus(`#LT-D${String(i).padStart(3, "0")}`, "PAID", `ref-D-${i}`),
+      `paid#${i}`
+    );
+    await sleep(1300);
+  }
+  console.log("   …settling 30s before recompute");
+  await sleep(30000);
   const got = await recompute();
   console.log(`expected → reserved ${PENDING}, sold ${PAID}, available ${STOCK - PENDING}`);
   console.log(`actual   → reserved ${got.reserved}, sold ${got.sold}, available ${got.available}`);

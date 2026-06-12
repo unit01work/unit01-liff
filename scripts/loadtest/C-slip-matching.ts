@@ -21,7 +21,7 @@ import {
   updateOrderStatus,
   claimAndMarkPaid,
 } from "../../lib/sheets";
-import { clearTab, tab, runConcurrent, banner } from "./_util";
+import { clearTab, runConcurrent, banner, sleep, withRetry } from "./_util";
 
 const N = Number(process.argv[2]) || 50;
 const AMOUNT = 150; // identical for every order
@@ -48,29 +48,36 @@ function order(i: number) {
 
 async function seedOrders(n: number) {
   await clearTab("Orders");
-  // Sequential append to guarantee all land (Part 1 is about matching, not write race).
-  for (let i = 0; i < n; i++) await appendOrder(order(i));
+  // Sequential + throttled + retry: this is harness SETUP (not the measured
+  // path), so we stay under the Sheets per-minute quota to guarantee all N rows
+  // land before the matching check.
+  for (let i = 0; i < n; i++) {
+    await withRetry(() => appendOrder(order(i)), `seed#${i}`);
+    await sleep(1300);
+  }
 }
 
 async function part1Matching() {
   banner(`TEST C · Part 1 — ${N} identical-amount slips must match distinct orders`);
   await seedOrders(N);
 
-  const { results } = await runConcurrent(N, (i) =>
-    findPendingOrder(`Uslip_${i}`, AMOUNT)
-  );
-
+  // findPendingOrder is a read against a STABLE sheet (no writes happen during
+  // matching), so the result is independent of timing. We resolve them
+  // sequentially to keep the read-quota clean — correctness is identical to
+  // firing them concurrently.
   const matched: string[] = [];
   let wrongUser = 0;
   let notFound = 0;
-  results.forEach((r, i) => {
-    if (r.status !== "fulfilled" || !r.value) {
+  for (let i = 0; i < N; i++) {
+    const o = await withRetry(() => findPendingOrder(`Uslip_${i}`, AMOUNT), `match#${i}`);
+    if (!o) {
       notFound++;
-      return;
+      continue;
     }
-    matched.push(r.value["Order ID"]);
-    if (r.value["LINE User ID"] !== `Uslip_${i}`) wrongUser++;
-  });
+    matched.push(o["Order ID"]);
+    if (o["LINE User ID"] !== `Uslip_${i}`) wrongUser++;
+    await sleep(1100);
+  }
   const distinct = new Set(matched).size;
 
   console.log(`matched:          ${matched.length}/${N}`);
@@ -115,6 +122,7 @@ async function part2DoubleClaim() {
   );
 
   // FIXED: claimAndMarkPaid (locked dedup+write).
+  await sleep(20000);
   await clearTab("Orders");
   await appendOrder(order(900));
   await appendOrder(order(901));
@@ -140,7 +148,12 @@ async function part2DoubleClaim() {
 }
 
 async function main() {
+  // Recover quota in case another test ran just before this one.
+  console.log("…initial 30s quota recovery");
+  await sleep(30000);
   const p1 = await part1Matching();
+  console.log("   …settling 60s for quota window before Part 2");
+  await sleep(60000);
   const p2 = await part2DoubleClaim();
   console.log(JSON.stringify({ test: "C", ...p1, ...p2 }));
 }
