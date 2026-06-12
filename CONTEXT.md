@@ -165,6 +165,13 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 - **bottleneck = Google Sheets quota 60 read + 60 write/นาที** — 20-50 ใบพร้อมกันจะโดน throttle (บางใบได้ 503 ให้ retry) นี่คือเหตุผลหลักที่ควรพิจารณา Shopify inventory hold สำหรับดรอปใหญ่ (ข้างล่าง)
 - **Load test:** `scripts/loadtest/` (รันบน TEST sheet เท่านั้น — `_env.ts` กัน prod id). Test A=write integrity, B=oversell, C=slip dedup/match, D=reserved/available, **E=ยิง HTTP `/api/order` route จริง** (มี safety pre-flight ยืนยัน server ชี้ test sheet ก่อนยิงโหลด). ผลล่าสุด: ออเดอร์ที่ตอบ 200 ลงครบ 100% (0 หาย/0 ทับ), oversell 0, สลิปซ้ำ 2→1, accounting เป๊ะ
 
+### Optimize latency ออเดอร์เดียว (เสร็จแล้ว — ขึ้น production แล้ว 2026-06-12)
+หลังเพิ่ม mutex + อ่าน Stock การสร้างออเดอร์ใบเดียวหน่วง (~3.8s) แก้ 3 จุดใน branch แยก (วัด before/after + รัน A→D ซ้ำ ผ่านทุกการ์ด) ลดเหลือ ~2.7s warm median (~28% เร็วขึ้น) + ตัด LINE push ออกจาก path = รู้สึกเร็วขึ้นอีก:
+- **cache doc handle 5 นาที (`getReadyDoc()` ใน `lib/sheets.ts`)** — `doc.loadInfo()` ดึงแค่ metadata (รายชื่อแท็บ/pointer header ~900ms) เลยแคชไว้ 5 นาที ไม่ต้อง round-trip ทุกใบ **ข้อมูลแถว/สต็อกยังอ่านสดทุกครั้งผ่าน `getRows()`** → เลขคำนวณ oversell ไม่มีทางเก่า. self-heal: ถ้า cache พลาดแท็บ Orders/Stock Log จะ force refresh (`getReadyDoc(true)`) ก่อนเขียน + มี `invalidateDocCache()`. คอลัมน์/แท็บใหม่ติดภายใน ≤5 นาที (deploy ล้าง cache ทันที)
+- **ลบ `loadHeaderRow()` ซ้ำตอนอ่าน Stock** — `getRows()` โหลด header ของชีตนั้นในตัวอยู่แล้ว → เรียกซ้ำก่อนหน้าเปลือง ~500ms/ใบ
+- **ย้าย LINE push (Flex QR + เตือน 5 นาที) ไป background ด้วย `after()` (`next/server`)** — ตอบ HTTP กลับทันทีหลัง order ลงชีต ไม่บล็อกรอ LINE 2 round-trip. **never-silent ยังอยู่:** `after()` รันแม้ response จบแล้ว, ถ้า push พังจะเรียก `alertOwnerNotifyFailed()` แจ้งเจ้าของว่าลูกค้าอาจไม่ได้ QR (เดิม console.error เฉยๆ)
+- ไม่แตะ `getOrCreateSheet()` (header migration ~500ms) จงใจเก็บเป็นตาข่ายกันชีตผิดโครงสร้าง — flag ไว้เป็น optimize อนาคต
+
 ### Loading screen ตอน CHECKOUT (เสร็จแล้ว — ขึ้น production แล้ว 2026-06-12)
 หลัง mutex/createOrderGuarded เพิ่มการอ่าน Stock การสร้างออเดอร์ใช้เวลาขึ้น (โหลดหนักได้หลายวินาที) จึงเพิ่มหน้า loading กันลูกค้ากดซ้ำ/งง
 - **`components/LoadingOverlay.tsx`** — overlay เต็มจอตอนกด CHECKOUT (`screen === "creating"` ใน `app/shop/page.tsx`) ระหว่างบันทึกออเดอร์ + สร้าง PromptPay QR

@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import { getLineClient } from "@/lib/line";
 import { saveOrder } from "@/lib/order-store";
 import { buildOrderFlex } from "@/lib/flex-order";
 import { createOrderGuarded, type ReserveLineItem } from "@/lib/sheets";
+import { alertOwnerNotifyFailed } from "@/lib/order-sync";
 
 interface CartItem {
   name: string;
@@ -125,42 +127,63 @@ export async function POST(request: NextRequest) {
     //    row is actually persisted.
     saveOrder(orderIdClean, total);
 
-    // 3. Send Flex Message
+    // 3. Notify the customer on LINE (Flex + QR + payment-timeout warning) AFTER
+    //    the HTTP response is sent. The client only needs `orderId` to show the
+    //    QR screen, so blocking the response on two LINE round-trips just made
+    //    checkout feel slow. `after()` (next/server) runs this once the response
+    //    has flushed; on Vercel it's kept alive via waitUntil.
+    //
+    //    never-silent: a failure here used to only console.error. Now that it
+    //    runs post-response, that would vanish — so on failure we ALSO push an
+    //    owner alert so a customer who didn't get their QR is never lost quietly.
     if (
       body.lineUserId &&
       process.env.LINE_CHANNEL_ACCESS_TOKEN &&
       process.env.LINE_CHANNEL_ACCESS_TOKEN !== "YOUR_CHANNEL_ACCESS_TOKEN_HERE"
     ) {
-      const client = getLineClient();
-      try {
-        const flexMsg = buildOrderFlex({
-          orderId,
-          cart,
-          shipping,
-          total,
-          ship,
-          qrUrl,
-          liffUrl: LIFF_URL,
-        });
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await client.pushMessage({ to: body.lineUserId, messages: [flexMsg as any] });
-        console.log("Flex Message sent");
-
-        // Send payment timeout warning
-        await client.pushMessage({
-          to: body.lineUserId,
-          messages: [{
-            type: "text",
-            text: "Please complete payment within 5 minutes.\nYour order will be automatically cancelled if no payment is received.",
-          }],
-        });
-      } catch (flexErr: unknown) {
-        if (flexErr && typeof flexErr === "object" && "body" in flexErr) {
-          console.error("LINE API error:", String((flexErr as { body: unknown }).body));
-        } else {
-          console.error("Flex message failed:", String(flexErr));
+      after(async () => {
+        try {
+          const client = getLineClient();
+          const flexMsg = buildOrderFlex({
+            orderId,
+            cart,
+            shipping,
+            total,
+            ship,
+            qrUrl,
+            liffUrl: LIFF_URL,
+          });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await client.pushMessage({ to: body.lineUserId, messages: [flexMsg as any] });
+          // Payment timeout warning
+          await client.pushMessage({
+            to: body.lineUserId,
+            messages: [{
+              type: "text",
+              text: "Please complete payment within 5 minutes.\nYour order will be automatically cancelled if no payment is received.",
+            }],
+          });
+          console.log("Flex Message sent (after response):", orderId);
+        } catch (flexErr: unknown) {
+          const reason =
+            flexErr && typeof flexErr === "object" && "body" in flexErr
+              ? String((flexErr as { body: unknown }).body)
+              : String(flexErr);
+          console.error("Flex message failed (deferred):", reason);
+          // never-silent — alert the owner that the customer may not have the QR.
+          await alertOwnerNotifyFailed(
+            orderId,
+            {
+              customer: `${shipping.firstName} ${shipping.lastName}`.trim(),
+              items: cart.map((c) => `${c.name} (${c.size}) x${c.qty}`).join(", "),
+              total,
+              phone: shipping.phone,
+              lineUserId: body.lineUserId,
+            },
+            reason
+          );
         }
-      }
+      });
     }
 
     const orderText = `Order ${orderId} — Total ฿${total.toLocaleString("en-US")}`;
