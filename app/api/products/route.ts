@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { compareSizes } from "@/lib/products";
-import { getPendingReservedMap } from "@/lib/sheets";
+import { getCommittedMap } from "@/lib/sheets";
 
 interface ShopifyVariant {
   id: number;
@@ -81,16 +81,18 @@ export async function GET() {
       // Non-fatal — products still render without color label / size guide.
     }
 
-    // Units already spoken for by PENDING (unpaid) orders, per variant. Live
-    // Shopify stock only drops when an order is PAID (draft order completed), so
-    // a size with PENDING reservations can still report stock > 0 here even
-    // though the order guard would reject it. Subtract these so a fully-reserved
-    // size shows as sold-out (struck-through) in the shop, matching the guard.
-    let pendingReserved: Record<string, number> = {};
+    // Units already committed per variant = PENDING (reserved) + PAID (sold),
+    // read live from the Orders tab. Shopify inventory_quantity is NOT
+    // decremented when an order is paid in this setup, so a size that is fully
+    // sold (or reserved) still reports stock > 0 from Shopify even though the
+    // order guard would reject it. Subtract committed so effective availability
+    // matches the guard (available = Shopify stock − committed) and a sold-out
+    // size shows as struck-through/disabled in the shop.
+    let committed: Record<string, number> = {};
     try {
-      pendingReserved = await getPendingReservedMap();
+      committed = await getCommittedMap();
     } catch (e) {
-      console.error("[products] pending-reserved fetch failed:", e);
+      console.error("[products] committed-map fetch failed:", e);
       // Non-fatal — fall back to raw Shopify stock (no reservation subtraction).
     }
 
@@ -119,15 +121,15 @@ export async function GET() {
         const variants = p.variants
           .map((v) => {
             const raw = v.inventory_quantity ?? 0;
-            const reserved = pendingReserved[String(v.id)] ?? 0;
+            const used = committed[String(v.id)] ?? 0;
             return {
               id: String(v.id),
               shopifyVariantId: String(v.id),
               size: v.title,
               price: parseFloat(v.price),
-              // Effective availability = Shopify stock − PENDING reservations,
+              // Effective availability = Shopify stock − committed (PENDING+PAID),
               // floored at 0. Drives the struck-through/disabled size button.
-              stock: Math.max(0, raw - reserved),
+              stock: Math.max(0, raw - used),
             };
           })
           // Sort sizes S → M → L → XL (unknowns last) so the shop buttons
