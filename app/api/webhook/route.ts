@@ -55,21 +55,153 @@ function matchKeyword(text: string, keywords: string[]): boolean {
 
 /* ── reply builders ── */
 // Single fallback for any inbound text/sticker that matches no configured
-// keyword. The "how to order" URL must stay tappable in LINE: keep a space
-// between the decorative bracket and the URL so link-detection captures only
-// the URL itself.
+// keyword. Sent as a LINE Flex menu (per LINE message spec §3): three tappable
+// rows — How to order (opens the LIFF shop), View products (sends "CATALOG"),
+// Contact us (sends "contact us", which CONTACT_KEYWORDS picks up). Each row's
+// whole box carries the action so the entire row is tappable.
 function fallbackReply() {
   return [
     {
-      type: "text" as const,
-      text:
-        `UNIT-01\n\n` +
-        `Tap the menu below to get started.\n` +
-        `If you can't find what you need:\n\n` +
-        `How to order\n` +
-        `[ https://liff.line.me/2010192572-jfj8ev6c ]\n\n` +
-        `View our products — type [ Catalog ]\n` +
-        `Reach our team — type [ Contact Us ]`,
+      type: "flex",
+      altText: "UNIT-01 — How can we help?",
+      contents: {
+        type: "bubble",
+        size: "mega",
+        header: {
+          type: "box",
+          layout: "vertical",
+          backgroundColor: "#ECE7E1",
+          paddingTop: "12px",
+          paddingBottom: "12px",
+          paddingStart: "16px",
+          paddingEnd: "16px",
+          contents: [
+            { type: "text", text: "UNIT-01", size: "sm", weight: "bold", color: "#8A8A86" },
+          ],
+        },
+        body: {
+          type: "box",
+          layout: "vertical",
+          paddingAll: "0px",
+          contents: [
+            {
+              type: "box",
+              layout: "vertical",
+              paddingStart: "16px",
+              paddingEnd: "16px",
+              paddingTop: "15px",
+              paddingBottom: "12px",
+              contents: [
+                { type: "text", text: "How can we help?", size: "lg", weight: "bold", color: "#1A1A1A" },
+                { type: "text", text: "Select an option below", size: "sm", color: "#9B9B97", margin: "xs" },
+              ],
+            },
+            { type: "separator", color: "#EFEFED" },
+            {
+              type: "box",
+              layout: "horizontal",
+              alignItems: "center",
+              paddingTop: "13px",
+              paddingBottom: "13px",
+              paddingStart: "16px",
+              paddingEnd: "16px",
+              action: { type: "uri", label: "How to order", uri: "https://liff.line.me/2010192572-jfj8ev6c" },
+              contents: [
+                {
+                  type: "box",
+                  layout: "vertical",
+                  flex: 1,
+                  contents: [
+                    {
+                      type: "box",
+                      layout: "baseline",
+                      contents: [
+                        { type: "text", text: "[ 1 ]", flex: 0, size: "md", weight: "bold", color: "#1A1A1A" },
+                        { type: "text", text: "How to order", flex: 0, size: "md", weight: "bold", color: "#1A1A1A", margin: "md" },
+                      ],
+                    },
+                    { type: "text", text: "OPEN SHOP", size: "xxs", color: "#AEA9A1", margin: "sm" },
+                  ],
+                },
+                { type: "text", text: "›", flex: 0, size: "xl", color: "#C2C2C0", align: "end", gravity: "center" },
+              ],
+            },
+            { type: "separator", color: "#EFEFED" },
+            {
+              type: "box",
+              layout: "horizontal",
+              alignItems: "center",
+              paddingTop: "13px",
+              paddingBottom: "13px",
+              paddingStart: "16px",
+              paddingEnd: "16px",
+              action: { type: "message", label: "View products", text: "CATALOG" },
+              contents: [
+                {
+                  type: "box",
+                  layout: "vertical",
+                  flex: 1,
+                  contents: [
+                    {
+                      type: "box",
+                      layout: "baseline",
+                      contents: [
+                        { type: "text", text: "[ 2 ]", flex: 0, size: "md", weight: "bold", color: "#1A1A1A" },
+                        { type: "text", text: "View products", flex: 0, size: "md", weight: "bold", color: "#1A1A1A", margin: "md" },
+                      ],
+                    },
+                    { type: "text", text: "CATALOG", size: "xxs", color: "#AEA9A1", margin: "sm" },
+                  ],
+                },
+                { type: "text", text: "›", flex: 0, size: "xl", color: "#C2C2C0", align: "end", gravity: "center" },
+              ],
+            },
+            { type: "separator", color: "#EFEFED" },
+            {
+              type: "box",
+              layout: "horizontal",
+              alignItems: "center",
+              paddingTop: "13px",
+              paddingBottom: "13px",
+              paddingStart: "16px",
+              paddingEnd: "16px",
+              action: { type: "message", label: "Contact us", text: "contact us" },
+              contents: [
+                {
+                  type: "box",
+                  layout: "vertical",
+                  flex: 1,
+                  contents: [
+                    {
+                      type: "box",
+                      layout: "baseline",
+                      contents: [
+                        { type: "text", text: "[ 3 ]", flex: 0, size: "md", weight: "bold", color: "#1A1A1A" },
+                        { type: "text", text: "Contact us", flex: 0, size: "md", weight: "bold", color: "#1A1A1A", margin: "md" },
+                      ],
+                    },
+                    { type: "text", text: "SUPPORT", size: "xxs", color: "#AEA9A1", margin: "sm" },
+                  ],
+                },
+                { type: "text", text: "›", flex: 0, size: "xl", color: "#C2C2C0", align: "end", gravity: "center" },
+              ],
+            },
+            { type: "separator", color: "#EFEFED" },
+            {
+              type: "box",
+              layout: "horizontal",
+              paddingTop: "11px",
+              paddingBottom: "11px",
+              paddingStart: "16px",
+              paddingEnd: "16px",
+              contents: [
+                { type: "text", text: "UNIT-01 — OFFICIAL", size: "xxs", color: "#AEA9A1", flex: 1 },
+                { type: "text", text: "22-05-1-A", size: "xxs", color: "#C4BFB7", align: "end" },
+              ],
+            },
+          ],
+        },
+      },
     },
   ];
 }
