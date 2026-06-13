@@ -85,17 +85,24 @@ export async function alertOwnerOrphanPayment(args: {
   transRef: string;
   userId: string;
   when: string;
+  senderName?: string;
+  sendingBank?: string;
+  slipDateTime?: string;
 }): Promise<void> {
-  const { amount, transRef, userId, when } = args;
+  const { amount, transRef, userId, when, senderName, sendingBank, slipDateTime } = args;
+  const sender = [senderName, sendingBank].filter(Boolean).join(" / ");
   const text =
     `⚠️ เงินเข้าแต่ไม่พบออเดอร์ที่รอชำระ\n` +
     `(SlipOK ตรวจสลิปผ่านแล้ว แต่ระบบจับคู่ออเดอร์ PENDING ไม่ได้)\n\n` +
     `ยอดเงิน: ฿${amount}\n` +
-    `เวลา: ${when}\n` +
+    `เวลาในสลิป: ${slipDateTime || "-"}\n` +
+    `เวลาที่ระบบรับ: ${when}\n` +
+    `คนโอน: ${sender || "-"}\n` +
     `Ref สลิป: ${transRef || "-"}\n` +
     `LINE userId ลูกค้า: ${userId}\n\n` +
     `⛔️ อาจเป็นออเดอร์ที่หมดอายุไปแล้ว หรือยอดไม่ตรง — ` +
-    `ตรวจสอบและติดต่อลูกค้า/คืนเงินด้วยตนเอง`;
+    `ตรวจสอบและติดต่อลูกค้า/คืนเงินด้วยตนเอง\n` +
+    `(บันทึกไว้ในแท็บ "Orphan Payments" ในชีตแล้ว)`;
   const sent = await pushOwner(text);
   if (sent) console.log("[order-sync] Owner alerted about orphan payment:", transRef, "฿" + amount);
   else console.error("[order-sync] Could not alert owner about orphan payment:", transRef);

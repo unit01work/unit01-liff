@@ -980,6 +980,52 @@ export async function appendStockLog(entry: StockLogEntry): Promise<void> {
   }
 }
 
+const ORPHAN_PAYMENT_HEADERS = [
+  "Received At", "Amount", "Slip Date", "Slip Ref",
+  "Sender Name", "Sending Bank", "LINE User ID", "Status",
+];
+
+export interface OrphanPaymentEntry {
+  amount: number;
+  transRef: string;
+  userId: string;
+  /** Date/time read off the slip itself (SlipOK transDate + transTime). */
+  slipDateTime?: string;
+  senderName?: string;
+  sendingBank?: string;
+}
+
+/**
+ * Append a row to the "Orphan Payments" tab — a verified slip whose money could
+ * NOT be matched to any PENDING order (order expired before the slip arrived,
+ * amount mismatch, wrong account, etc.). This is the permanent paper trail that
+ * complements the LINE owner alert: it survives even if the LINE message is
+ * missed/deleted, so the owner can reconcile/refund later. Never throws.
+ */
+export async function appendOrphanPayment(entry: OrphanPaymentEntry): Promise<void> {
+  try {
+    const doc = getDoc();
+    await doc.loadInfo();
+    const sheet = await getOrCreateTab(doc, "Orphan Payments", ORPHAN_PAYMENT_HEADERS);
+    await sheet.addRow({
+      "Received At": nowBKK(),
+      "Amount": entry.amount,
+      // Force TEXT (leading apostrophe) so Sheets doesn't coerce it to a date
+      // serial and reformat the hour (e.g. "09:42" -> "9:42") — same coercion
+      // that broke auto-cancel. Keeps the slip timestamp verbatim.
+      "Slip Date": entry.slipDateTime ? `'${entry.slipDateTime}` : "",
+      "Slip Ref": entry.transRef || "",
+      "Sender Name": entry.senderName || "",
+      "Sending Bank": entry.sendingBank || "",
+      "LINE User ID": entry.userId || "",
+      "Status": "NEW",
+    });
+    console.log("[sheets] Logged orphan payment:", entry.transRef, "฿" + entry.amount);
+  } catch (err) {
+    console.error("[sheets] appendOrphanPayment failed:", err);
+  }
+}
+
 /** Append a Stock Log row for every line item of an order. */
 export async function logOrderStockMovement(
   order: OrderRow,

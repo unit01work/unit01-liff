@@ -12,6 +12,7 @@ import {
   findActiveOrders,
   findExpiredOrders,
   logOrderStockMovement,
+  appendOrphanPayment,
 } from "@/lib/sheets";
 import {
   getShopifyOrderStatus,
@@ -365,9 +366,24 @@ async function handleSlipImage(
       // SlipOK already verified this is a REAL payment (we're past the validity
       // check above), but no PENDING order matched — money is in with no order
       // (likely expired before the slip arrived, or amount mismatch). Don't let it
-      // vanish silently: alert the owner with everything needed to reconcile.
+      // vanish silently: write a permanent row to the "Orphan Payments" tab AND
+      // alert the owner with everything needed to reconcile/refund.
       console.log("[slip] No matching order for userId:", userId, "amount:", amount);
-      await alertOwnerOrphanPayment({ amount, transRef, userId, when: nowBKK() });
+      const senderName = slipResult.data.sender?.name || slipResult.data.sender?.displayName || "";
+      const sendingBank = slipResult.data.sendingBank || "";
+      const slipDateTime = [slipResult.data.transDate, slipResult.data.transTime]
+        .filter(Boolean)
+        .join(" ");
+      await appendOrphanPayment({ amount, transRef, userId, senderName, sendingBank, slipDateTime });
+      await alertOwnerOrphanPayment({
+        amount,
+        transRef,
+        userId,
+        when: nowBKK(),
+        senderName,
+        sendingBank,
+        slipDateTime,
+      });
       return replyNoMatchingOrder(amount);
     }
     const order = claim.order!;
