@@ -88,8 +88,8 @@ function fallbackReply() {
               layout: "vertical",
               paddingAll: "lg",
               contents: [
-                { type: "text", text: "How can we help?", size: "sm", color: "#1A1A1A", weight: "bold" },
-                { type: "text", text: "Select an option below", size: "xxs", color: "#999999", margin: "xs" },
+                { type: "text", text: "Looking for something?", size: "sm", color: "#1A1A1A", weight: "bold" },
+                { type: "text", text: "Choose an option below", size: "xxs", color: "#999999", margin: "xs" },
               ],
             },
             { type: "separator", color: "#EBE7E4" },
