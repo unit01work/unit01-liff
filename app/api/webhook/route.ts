@@ -76,10 +76,16 @@ function fallbackReply() {
             {
               type: "box",
               layout: "vertical",
-              backgroundColor: "#E5E0DD",
+              background: {
+                type: "linearGradient",
+                angle: "90deg",
+                startColor: "#0E0B08",
+                centerColor: "#A8551F",
+                endColor: "#ECB45A",
+              },
               paddingAll: "lg",
               contents: [
-                { type: "text", text: "UNIT-01", size: "xxs", color: "#555555", weight: "bold" },
+                { type: "text", text: "UNIT-01", size: "xxs", color: "#FFFFFF", weight: "bold" },
               ],
             },
             // Body
