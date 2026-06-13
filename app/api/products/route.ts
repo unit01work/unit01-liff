@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { compareSizes } from "@/lib/products";
-import { getCommittedMap } from "@/lib/sheets";
+import { getPendingReservedMap } from "@/lib/sheets";
 
 interface ShopifyVariant {
   id: number;
@@ -81,18 +81,19 @@ export async function GET() {
       // Non-fatal — products still render without color label / size guide.
     }
 
-    // Units already committed per variant = PENDING (reserved) + PAID (sold),
-    // read live from the Orders tab. Shopify inventory_quantity is NOT
-    // decremented when an order is paid in this setup, so a size that is fully
-    // sold (or reserved) still reports stock > 0 from Shopify even though the
-    // order guard would reject it. Subtract committed so effective availability
-    // matches the guard (available = Shopify stock − committed) and a sold-out
-    // size shows as struck-through/disabled in the shop.
-    let committed: Record<string, number> = {};
+    // Units held by PENDING (unpaid) orders, per variant, read live from the
+    // Orders tab. A Shopify order is auto-created only when payment is verified
+    // (PAID), so Shopify's own inventory_quantity ("Available") already nets out
+    // PAID orders — we must NOT subtract PAID again. PENDING orders exist only in
+    // our sheet (no Shopify order yet), so Shopify still counts their units as
+    // available even though the order guard reserves them. Subtract PENDING so a
+    // size fully spoken for by unpaid orders shows as sold-out, matching the
+    // guard, without double-counting what Shopify already removed.
+    let pendingReserved: Record<string, number> = {};
     try {
-      committed = await getCommittedMap();
+      pendingReserved = await getPendingReservedMap();
     } catch (e) {
-      console.error("[products] committed-map fetch failed:", e);
+      console.error("[products] pending-reserved fetch failed:", e);
       // Non-fatal — fall back to raw Shopify stock (no reservation subtraction).
     }
 
@@ -121,15 +122,17 @@ export async function GET() {
         const variants = p.variants
           .map((v) => {
             const raw = v.inventory_quantity ?? 0;
-            const used = committed[String(v.id)] ?? 0;
+            const reserved = pendingReserved[String(v.id)] ?? 0;
             return {
               id: String(v.id),
               shopifyVariantId: String(v.id),
               size: v.title,
               price: parseFloat(v.price),
-              // Effective availability = Shopify stock − committed (PENDING+PAID),
-              // floored at 0. Drives the struck-through/disabled size button.
-              stock: Math.max(0, raw - used),
+              // Effective availability = Shopify "Available" − PENDING reservations,
+              // floored at 0. Shopify already nets out PAID orders (auto-created on
+              // payment); we only subtract unpaid holds. Drives the struck-through
+              // / disabled size button.
+              stock: Math.max(0, raw - reserved),
             };
           })
           // Sort sizes S → M → L → XL (unknowns last) so the shop buttons
