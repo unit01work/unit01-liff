@@ -227,10 +227,27 @@ function fallbackReply() {
 function replyConfirmPayment(orderId: string, amount: number, paidAt: string) {
   const id = orderId.startsWith("#") ? orderId : `#${orderId}`;
   const deadline = formatDeadline(computeEditDeadline(paidAt));
-  const messages: { type: "text"; text: string }[] = [
+  // msg1 = Flex card (green text only, no top bar, no button); msg2 = edit
+  // deadline (kept as a SEPARATE plain-text message — owned by edit-lock).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const messages: any[] = [
     {
-      type: "text" as const,
-      text: `ORDER CONFIRMED [ Paid ]\n${id} · ฿${amount}\n\nYOUR FIRST UNIT. USE IT WELL.`,
+      type: "flex",
+      altText: `ORDER CONFIRMED [ Paid ] — ${id}`,
+      contents: {
+        type: "bubble",
+        body: {
+          type: "box",
+          layout: "vertical",
+          paddingAll: "lg",
+          spacing: "sm",
+          contents: [
+            { type: "text", text: "ORDER CONFIRMED   [ Paid ]", size: "xs", color: "#5B805E", weight: "bold" },
+            { type: "text", text: `${id} · ฿${amount}`, size: "sm", color: "#444444" },
+            { type: "text", text: "YOUR FIRST UNIT.\nUSE IT WELL.", size: "md", color: "#1A1714", weight: "bold", wrap: true, margin: "md" },
+          ],
+        },
+      },
     },
   ];
   // Only attach the deadline block if we could compute one (always, for a
@@ -258,10 +275,39 @@ function replyNoMatchingOrder(amount: number) {
 }
 
 function replyInvalidSlip() {
+  // Red text-only Flex (no top bar) + a small gray "Still stuck? Contact us"
+  // button. The button reuses the EXISTING Contact flow: action message
+  // "contact us" → CONTACT_KEYWORDS → buildContactMenuNoOrder (ORDER SUPPORT
+  // menu). No new contact card / handler is created.
   return [
     {
-      type: "text" as const,
-      text: `[ x ] SLIP NOT VERIFIED\n\nWe could not verify this slip.\nResend a clear image with the full QR code visible,\nor type [ Contact Us ] if the problem persists.`,
+      type: "flex",
+      altText: "[ x ] SLIP NOT VERIFIED",
+      contents: {
+        type: "bubble",
+        body: {
+          type: "box",
+          layout: "vertical",
+          paddingAll: "lg",
+          spacing: "sm",
+          contents: [
+            { type: "text", text: "[ x ]  SLIP NOT VERIFIED", size: "xs", color: "#874545", weight: "bold" },
+            { type: "text", text: "We couldn't read your slip — please send it again.", size: "sm", color: "#1A1714", wrap: true, margin: "sm" },
+            {
+              type: "box",
+              layout: "vertical",
+              backgroundColor: "#3A3A3A",
+              cornerRadius: "md",
+              paddingAll: "sm",
+              margin: "lg",
+              action: { type: "message", label: "Contact us", text: "contact us" },
+              contents: [
+                { type: "text", text: "Still stuck? Contact us", size: "xs", color: "#FFFFFF", weight: "bold", align: "center" },
+              ],
+            },
+          ],
+        },
+      },
     },
   ];
 }
@@ -276,10 +322,13 @@ function replyDuplicateSlip() {
 }
 
 /* ── Handle image (slip) message ── */
+// Returns LINE messages (text and/or Flex) — widened to any[] because the
+// confirm / invalid-slip replies are now Flex while the others stay text.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleSlipImage(
   messageId: string,
   userId: string
-): Promise<{ type: "text"; text: string }[]> {
+): Promise<any[]> {
   try {
     // 1. Download image from LINE
     console.log("[slip] Downloading image:", messageId);
