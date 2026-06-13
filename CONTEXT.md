@@ -203,7 +203,7 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 
 ## Payment replies เป็น Flex card (merge + ขึ้น production แล้ว 2026-06-14)
 เปลี่ยนข้อความตอบหลังส่งสลิป "จ่ายสำเร็จ / สลิปไม่ผ่าน" จาก plain text → Flex card. **แตะแค่ "ข้อความตอบ" ใน `app/api/webhook/route.ts` 3 ฟังก์ชัน** ไม่แตะ logic ตรวจสลิป/SlipOK/สร้าง Shopify order/claimPaymentForUser
-- **`replyConfirmPayment()` (จ่ายสำเร็จ):** ข้อความ1 = Flex สีเขียว `#5B805E` (ตัวอักษรเขียวล้วน ไม่มีแถบสีบน ไม่มีปุ่ม): kicker `ORDER CONFIRMED   [ Paid ]` (xs เขียว) / `#UT-xxxxxx · ฿xxxx` (sm เทา) / `YOUR FIRST UNIT. USE IT WELL.` (md หนา). **ข้อความ2 (เดดไลน์ edit-lock) ยังเป็น plain text แยกเหมือนเดิม** (owned by edit-lock — ไม่แตะ)
+- **`replyConfirmPayment()` (จ่ายสำเร็จ):** ข้อความ1 = Flex สีเขียว `#5B805E` (ตัวอักษรเขียวล้วน ไม่มีแถบสีบน ไม่มีปุ่ม): kicker `ORDER CONFIRMED   [ Paid ]` (xs เขียว) / `#UT-xxxxxx · ฿xxxx` (sm เทา) / `YOUR FIRST UNIT. USE IT WELL.` (sm หนา บรรทัดเดียว — ย่อจาก md/2บรรทัด ตาม feedback). **ข้อความ2 (เดดไลน์ edit-lock) ยังเป็น plain text แยกเหมือนเดิม** (owned by edit-lock — ไม่แตะ)
 - **`replyInvalidSlip()` (สลิปไม่ผ่าน):** Flex สีแดง `#874545` (ไม่มีแถบสีบน): kicker `[ x ]  SLIP NOT VERIFIED` (xs แดง) / `We couldn't read your slip — please send it again.` (sm) + ปุ่มกล่องเทา `#3A3A3A` ตัวเล็ก `Still stuck? Contact us` → **reuse flow เดิม** action `message` text `"contact us"` → `CONTACT_KEYWORDS` → `buildContactMenuNoOrder()` (เมนู ORDER SUPPORT เดิม) ไม่สร้างการ์ด contact/handler ใหม่
 - **คงเป็น text เดิม (ไม่อยู่ใน mockup):** `replyNoMatchingOrder` (NO MATCHING ORDER), `replyDuplicateSlip` (SLIP ALREADY USED)
 - return type ของ `handleSlipImage` ขยายเป็น `any[]` (รองรับ text+flex ปนกัน), `messages` reply cast `as any` อยู่แล้ว
