@@ -75,6 +75,33 @@ export async function pushOwner(text: string): Promise<boolean> {
 }
 
 /**
+ * Push a LINE alert to the shop owner when SlipOK verified a real payment but no
+ * matching PENDING order was found (e.g. the order already expired before the
+ * slip arrived, or the amount didn't match). Money is in but no order — the owner
+ * must reconcile by hand. Never silent.
+ */
+export async function alertOwnerOrphanPayment(args: {
+  amount: number;
+  transRef: string;
+  userId: string;
+  when: string;
+}): Promise<void> {
+  const { amount, transRef, userId, when } = args;
+  const text =
+    `⚠️ เงินเข้าแต่ไม่พบออเดอร์ที่รอชำระ\n` +
+    `(SlipOK ตรวจสลิปผ่านแล้ว แต่ระบบจับคู่ออเดอร์ PENDING ไม่ได้)\n\n` +
+    `ยอดเงิน: ฿${amount}\n` +
+    `เวลา: ${when}\n` +
+    `Ref สลิป: ${transRef || "-"}\n` +
+    `LINE userId ลูกค้า: ${userId}\n\n` +
+    `⛔️ อาจเป็นออเดอร์ที่หมดอายุไปแล้ว หรือยอดไม่ตรง — ` +
+    `ตรวจสอบและติดต่อลูกค้า/คืนเงินด้วยตนเอง`;
+  const sent = await pushOwner(text);
+  if (sent) console.log("[order-sync] Owner alerted about orphan payment:", transRef, "฿" + amount);
+  else console.error("[order-sync] Could not alert owner about orphan payment:", transRef);
+}
+
+/**
  * Push a LINE alert to the shop owner when a POST-PAYMENT EDIT (change size /
  * edit shipping address) was saved to the sheet but failed to sync to Shopify.
  * The Shopify order still exists with stale data, so the owner must fix it by

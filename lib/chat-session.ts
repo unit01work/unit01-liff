@@ -67,9 +67,12 @@ function bkkNow(): string {
 }
 
 // Parse a stored bkkNow() string back to epoch ms (treat as +07:00).
+// Sheets may reformat the cell to a single-digit hour ("... 0:42"), which is not
+// valid ISO 8601 → NaN. Zero-pad a single-digit hour before parsing.
 function parseBkk(s: string): number {
   if (!s) return 0;
-  const t = Date.parse(s.trim().replace(" ", "T") + "+07:00");
+  const iso = s.trim().replace(" ", "T").replace(/T(\d):/, "T0$1:");
+  const t = Date.parse(iso + "+07:00");
   return Number.isNaN(t) ? 0 : t;
 }
 

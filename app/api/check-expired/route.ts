@@ -2,17 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   getOrder,
   findExpiredOrders,
-  updateOrderStatus,
+  expireOrderIfPending,
   logOrderStockMovement,
   refreshStockTab,
+  parseSheetTimestamp,
   type OrderRow,
 } from "@/lib/sheets";
 import { getLineClient } from "@/lib/line";
 
-const EXPIRE_MINUTES = 5;
+const EXPIRE_MINUTES = 10;
 
 /**
- * Check and expire PENDING orders older than 5 minutes.
+ * Check and expire PENDING orders older than 10 minutes.
  * Can be called:
  * - GET /api/check-expired — check all expired orders
  * - GET /api/check-expired?orderId=xxx — check specific order
@@ -47,16 +48,17 @@ export async function GET(request: NextRequest) {
       const dateStr = order["Date"] || "";
       if (!dateStr) return NextResponse.json({ expired: 0 });
 
-      const orderDate = new Date(dateStr.replace(" ", "T") + "+07:00");
-      const diffMin = (Date.now() - orderDate.getTime()) / (1000 * 60);
+      const orderMs = parseSheetTimestamp(dateStr);
+      if (Number.isNaN(orderMs)) return NextResponse.json({ expired: 0 });
+      const diffMin = (Date.now() - orderMs) / (1000 * 60);
 
       if (diffMin < EXPIRE_MINUTES) {
         return NextResponse.json({ expired: 0, reason: "not yet expired", minutesLeft: Math.ceil(EXPIRE_MINUTES - diffMin) });
       }
 
-      await expireOrder(order, client);
+      const didExpire = await expireOrder(order, client);
       await refreshStockTab();
-      return NextResponse.json({ expired: 1 });
+      return NextResponse.json({ expired: didExpire ? 1 : 0 });
     }
 
     // Check all expired orders
@@ -64,8 +66,7 @@ export async function GET(request: NextRequest) {
 
     let count = 0;
     for (const order of expiredOrders) {
-      await expireOrder(order, client);
-      count++;
+      if (await expireOrder(order, client)) count++;
     }
 
     // Keep the Stock overview tab live on every cron tick (even if nothing expired)
@@ -78,12 +79,19 @@ export async function GET(request: NextRequest) {
   }
 }
 
-async function expireOrder(order: OrderRow, client: unknown) {
+async function expireOrder(order: OrderRow, client: unknown): Promise<boolean> {
   const orderId = order["Order ID"];
   const lineUserId = order["LINE User ID"];
   const displayId = orderId.startsWith("#") ? orderId : `#${orderId}`;
 
-  await updateOrderStatus(orderId, "EXPIRED", "");
+  // Atomically flip to EXPIRED only if STILL pending (under the payment lock) —
+  // a slip that lands in the same instant must never be cancelled. If it's no
+  // longer pending (e.g. just paid), skip everything below.
+  const didExpire = await expireOrderIfPending(orderId);
+  if (!didExpire) {
+    console.log(`[check-expired] Skip (no longer PENDING): ${orderId}`);
+    return false;
+  }
   console.log(`[check-expired] Expired order: ${orderId}`);
 
   // Stock Log: RETURNED (release the soft-reserve back to available)
@@ -104,4 +112,5 @@ async function expireOrder(order: OrderRow, client: unknown) {
       console.error("[check-expired] LINE push failed:", lineErr);
     }
   }
+  return true;
 }

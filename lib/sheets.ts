@@ -138,6 +138,25 @@ function nowBKK(): string {
   }).replace("T", " ").slice(0, 16);
 }
 
+/**
+ * Parse a sheet timestamp string ("YYYY-MM-DD HH:MM", Bangkok local) into epoch ms.
+ *
+ * Google Sheets coerces the Date column into a date serial and reformats it with
+ * the pattern `yyyy-mm-dd h:mm` — note the single `h`, so any order created in
+ * hours 00–09 reads back as e.g. "2026-06-14 0:42". `new Date("...T0:42...")` is
+ * NOT valid ISO 8601 → NaN, which silently broke auto-cancel (NaN >= 5 is false)
+ * for ~10 hours a day. We zero-pad a single-digit hour before parsing so the
+ * result is correct regardless of whether Sheets emits `h:mm` or `hh:mm`.
+ *
+ * Returns NaN for empty/unparseable input (callers already guard on NaN).
+ */
+export function parseSheetTimestamp(stamp: string): number {
+  if (!stamp) return NaN;
+  // "2026-06-14 0:42" -> "2026-06-14T0:42" -> "2026-06-14T00:42"
+  const iso = stamp.trim().replace(" ", "T").replace(/T(\d):/, "T0$1:");
+  return new Date(iso + "+07:00").getTime();
+}
+
 const HEADERS = [
   "Order ID", "Date", "LINE User ID", "Status",
   "Items", "Subtotal", "Shipping Fee", "Total",
@@ -491,9 +510,11 @@ export async function findExpiredOrders(minutes: number): Promise<OrderRow[]> {
     const dateStr = row.get("Date") || "";
     if (!dateStr) continue;
 
-    // Parse the date (stored in BKK time: "YYYY-MM-DD HH:mm")
-    const orderDate = new Date(dateStr.replace(" ", "T") + "+07:00");
-    const diffMs = now.getTime() - orderDate.getTime();
+    // Parse the date (stored in BKK time: "YYYY-MM-DD HH:mm").
+    // Use parseSheetTimestamp — Sheets may emit a single-digit hour ("h:mm").
+    const orderMs = parseSheetTimestamp(dateStr);
+    if (Number.isNaN(orderMs)) continue;
+    const diffMs = now.getTime() - orderMs;
     const diffMin = diffMs / (1000 * 60);
 
     if (diffMin >= minutes) {
@@ -768,7 +789,7 @@ export async function findRecentPaidOrders(
     // Prefer "Paid At", fall back to "Date" / "Updated At".
     const stamp = row.get("Paid At") || row.get("Date") || row.get("Updated At") || "";
     if (stamp) {
-      const t = new Date(stamp.replace(" ", "T") + "+07:00").getTime();
+      const t = parseSheetTimestamp(stamp);
       if (!Number.isNaN(t) && t < cutoff) continue;
     }
 
@@ -1344,5 +1365,42 @@ export async function claimPaymentForUser(
       }
     }
     return { ok: false, reason: "no_match" };
+  });
+}
+
+/**
+ * Atomically expire a single order — but ONLY if it is still PENDING.
+ *
+ * Runs inside the same withLock() critical section as claimPaymentForUser, and
+ * re-reads + re-checks the status immediately before writing EXPIRED. This closes
+ * the race where the auto-cancel cron read a row as PENDING, a slip then marked it
+ * PAID, and the cron blindly overwrote it back to EXPIRED (cancelling a paid
+ * order). If a payment wins the lock first, the status is PAID by the time we
+ * re-read, so we skip. Returns true only when we actually flipped a PENDING row.
+ *
+ * Note: withLock() serialises callers within a single process. On Vercel the cron
+ * and the webhook may run in separate instances, so the in-process lock is not a
+ * cross-process guarantee — the PENDING re-read here is the real safeguard, and it
+ * shrinks the residual race to a sub-second window.
+ */
+export async function expireOrderIfPending(orderId: string): Promise<boolean> {
+  return withLock(async () => {
+    const doc = getDoc();
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle["Orders"];
+    if (!sheet) return false;
+    try { await sheet.loadHeaderRow(); } catch { return false; }
+
+    const rows = await sheet.getRows();
+    const row = rows.find((r) => matchOrderId(r.get("Order ID") || "", orderId));
+    if (!row) return false;
+
+    // Re-check under the lock: never clobber a just-paid (or already-handled) order.
+    if ((row.get("Status") || "").toUpperCase() !== "PENDING") return false;
+
+    row.set("Status", "EXPIRED");
+    row.set("Updated At", nowBKK());
+    await row.save();
+    return true;
   });
 }
