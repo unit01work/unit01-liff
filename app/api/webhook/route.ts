@@ -85,28 +85,31 @@ function chatEnterReply() {
         body: {
           type: "box",
           layout: "vertical",
-          spacing: "md",
+          paddingAll: "lg",
+          spacing: "sm",
           contents: [
-            { type: "text", text: "LIVE CHAT", weight: "bold", size: "sm", color: "#C47237" },
-            { type: "text", text: "Our team will reply here.", size: "md", color: "#1A1A1A", wrap: true },
-            { type: "text", text: "Just send your message.", size: "sm", color: "#999999", wrap: true },
-          ],
-        },
-        footer: {
-          type: "box",
-          layout: "vertical",
-          contents: [
+            { type: "text", text: "LIVE CHAT", size: "xxs", color: "#C47237", weight: "bold" },
+            { type: "text", text: "Our team will reply here.", size: "sm", color: "#1A1A1A", weight: "bold", wrap: true },
+            { type: "text", text: "Just send your message.", size: "xxs", color: "#999999", wrap: true },
+            // Gradient "Back to shop" button (box-as-button so it can carry the
+            // SUNRISE linearGradient — Flex button color only takes a solid hex).
             {
-              type: "button",
-              style: "primary",
-              height: "md",
-              color: "#C47237",
-              action: {
-                type: "postback",
-                label: "Back to shop",
-                data: "action=exit_chat",
-                displayText: "Menu",
+              type: "box",
+              layout: "vertical",
+              margin: "md",
+              paddingAll: "md",
+              cornerRadius: "md",
+              background: {
+                type: "linearGradient",
+                angle: "90deg",
+                startColor: "#0E0B08",
+                centerColor: "#A8551F",
+                endColor: "#ECB45A",
               },
+              action: { type: "postback", label: "Back to shop", data: "action=exit_chat", displayText: "Menu" },
+              contents: [
+                { type: "text", text: "Back to shop", size: "sm", color: "#FFFFFF", weight: "bold", align: "center" },
+              ],
             },
           ],
         },
