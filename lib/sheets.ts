@@ -1183,6 +1183,38 @@ export async function getCommittedMap(): Promise<Record<string, number>> {
   return map;
 }
 
+/**
+ * variantId → units reserved by PENDING (unpaid) orders, read live from "Orders".
+ *
+ * PENDING-only on purpose: once an order is PAID its draft order is completed in
+ * Shopify, which decrements Shopify inventory_quantity. So live Shopify stock
+ * already reflects PAID sales — subtracting PAID again would double-count. This
+ * mirrors refreshStockTab's "Available" = Shopify Stock − Reserved(PENDING).
+ *
+ * Used by the shop products API to show a size as sold-out the moment its stock
+ * is fully spoken for by unpaid orders, matching the server-side order guard.
+ */
+export async function getPendingReservedMap(): Promise<Record<string, number>> {
+  const doc = getDoc();
+  await doc.loadInfo();
+  const sheet = doc.sheetsByTitle["Orders"];
+  const map: Record<string, number> = {};
+  if (!sheet) return map;
+  try { await sheet.loadHeaderRow(); } catch { return map; }
+  const rows = await sheet.getRows();
+  for (const row of rows) {
+    const status = (row.get("Status") || "").toUpperCase();
+    if (status !== "PENDING") continue;
+    const vids = (row.get("Variant IDs") || "") as string;
+    for (const part of vids.split(",")) {
+      const [vid, q] = part.trim().split(":");
+      if (!vid) continue;
+      map[vid] = (map[vid] || 0) + (parseInt(q, 10) || 1);
+    }
+  }
+  return map;
+}
+
 export interface ReserveLineItem {
   name: string;
   size: string;

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { compareSizes } from "@/lib/products";
+import { getPendingReservedMap } from "@/lib/sheets";
 
 interface ShopifyVariant {
   id: number;
@@ -80,6 +81,19 @@ export async function GET() {
       // Non-fatal — products still render without color label / size guide.
     }
 
+    // Units already spoken for by PENDING (unpaid) orders, per variant. Live
+    // Shopify stock only drops when an order is PAID (draft order completed), so
+    // a size with PENDING reservations can still report stock > 0 here even
+    // though the order guard would reject it. Subtract these so a fully-reserved
+    // size shows as sold-out (struck-through) in the shop, matching the guard.
+    let pendingReserved: Record<string, number> = {};
+    try {
+      pendingReserved = await getPendingReservedMap();
+    } catch (e) {
+      console.error("[products] pending-reserved fetch failed:", e);
+      // Non-fatal — fall back to raw Shopify stock (no reservation subtraction).
+    }
+
     const products = (data.products as ShopifyProduct[])
       // Stable order: sort by product id ascending (= creation order).
       // New products always append to the end, existing ones never shift.
@@ -103,13 +117,19 @@ export async function GET() {
           : "";
 
         const variants = p.variants
-          .map((v) => ({
-            id: String(v.id),
-            shopifyVariantId: String(v.id),
-            size: v.title,
-            price: parseFloat(v.price),
-            stock: v.inventory_quantity ?? 0,
-          }))
+          .map((v) => {
+            const raw = v.inventory_quantity ?? 0;
+            const reserved = pendingReserved[String(v.id)] ?? 0;
+            return {
+              id: String(v.id),
+              shopifyVariantId: String(v.id),
+              size: v.title,
+              price: parseFloat(v.price),
+              // Effective availability = Shopify stock − PENDING reservations,
+              // floored at 0. Drives the struck-through/disabled size button.
+              stock: Math.max(0, raw - reserved),
+            };
+          })
           // Sort sizes S → M → L → XL (unknowns last) so the shop buttons
           // are always in size order, not Shopify's arbitrary variant order.
           .sort((a, b) => compareSizes(a.size, b.size));
