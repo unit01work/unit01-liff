@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
+import { revalidateTag } from "next/cache";
 import { getLineClient } from "@/lib/line";
 import { saveOrder } from "@/lib/order-store";
 import { buildOrderFlex } from "@/lib/flex-order";
 import { createOrderGuarded, type ReserveLineItem } from "@/lib/sheets";
 import { alertOwnerNotifyFailed } from "@/lib/order-sync";
+import { PRODUCTS_CACHE_TAG } from "@/lib/products";
 
 interface CartItem {
   name: string;
@@ -126,6 +128,11 @@ export async function POST(request: NextRequest) {
     // 2. Save order amount for QR generation (in-memory) — only after the order
     //    row is actually persisted.
     saveOrder(orderIdClean, total);
+
+    // These units are now reserved (PENDING). Purge the shop's availability
+    // cache immediately so a size that just sold out shows as struck-through on
+    // the next shop load instead of after the time-based cache expires.
+    revalidateTag(PRODUCTS_CACHE_TAG, { expire: 0 });
 
     // 3. Notify the customer on LINE (Flex + QR + payment-timeout warning) AFTER
     //    the HTTP response is sent. The client only needs `orderId` to show the

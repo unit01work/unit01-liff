@@ -1,6 +1,17 @@
 import { NextResponse } from "next/server";
-import { compareSizes } from "@/lib/products";
+import { unstable_cache } from "next/cache";
+import { compareSizes, PRODUCTS_CACHE_TAG } from "@/lib/products";
 import { getPendingReservedMap } from "@/lib/sheets";
+
+// PENDING (unpaid) reservations, cached under the shared products tag. Purged
+// on-demand (revalidateTag) the moment an order is created / paid / cancelled,
+// with a 5-min time-based fallback. Keeps the per-request Sheets read off the
+// hot path so concurrent shop loads during a drop don't hammer the Sheets API.
+const getCachedPendingReserved = unstable_cache(
+  () => getPendingReservedMap(),
+  ["pending-reserved-map"],
+  { tags: [PRODUCTS_CACHE_TAG], revalidate: 300 }
+);
 
 interface ShopifyVariant {
   id: number;
@@ -29,7 +40,9 @@ export async function GET() {
         headers: {
           "X-Shopify-Access-Token": process.env.SHOPIFY_ADMIN_API_TOKEN!,
         },
-        next: { revalidate: 300 }, // Cache 5 minutes
+        // Cached in the Data Cache for 5 min, but tagged so a sale/payment can
+        // purge it on-demand (revalidateTag) — stock then refreshes instantly.
+        next: { revalidate: 300, tags: [PRODUCTS_CACHE_TAG] },
       }
     );
 
@@ -61,7 +74,7 @@ export async function GET() {
             query:
               '{ products(first:100, query:"status:active") { nodes { id color: metafield(namespace:"custom", key:"color_line") { value } sizechart: metafield(namespace:"custom", key:"sizechart") { reference { ... on MediaImage { image { url } } } } } } }',
           }),
-          next: { revalidate: 300 },
+          next: { revalidate: 300, tags: [PRODUCTS_CACHE_TAG] },
         }
       );
       if (gqlRes.ok) {
@@ -91,7 +104,7 @@ export async function GET() {
     // guard, without double-counting what Shopify already removed.
     let pendingReserved: Record<string, number> = {};
     try {
-      pendingReserved = await getPendingReservedMap();
+      pendingReserved = await getCachedPendingReserved();
     } catch (e) {
       console.error("[products] pending-reserved fetch failed:", e);
       // Non-fatal — fall back to raw Shopify stock (no reservation subtraction).
@@ -164,13 +177,15 @@ export async function GET() {
 
     const shippingFee = parseInt(process.env.SHIPPING_FEE || "50", 10);
 
+    // No CDN caching of the JSON itself: a CDN-cached response would keep
+    // serving stale stock for its whole TTL even after revalidateTag (the CDN
+    // doesn't see on-demand purges — see Next.js CDN caching docs). Instead the
+    // heavy Shopify + Sheets reads are cached in the tagged Data Cache above, so
+    // the handler runs per request but is cheap, and a sale/payment purges the
+    // tag to refresh stock immediately.
     return NextResponse.json(
       { products, shippingFee },
-      {
-        headers: {
-          "Cache-Control": "public, s-maxage=300, stale-while-revalidate=60",
-        },
-      }
+      { headers: { "Cache-Control": "no-store" } }
     );
   } catch (err) {
     console.error("[products] Error:", err);

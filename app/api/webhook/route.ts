@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { validateSignature } from "@line/bot-sdk";
 import { getLineClient } from "@/lib/line";
+import { PRODUCTS_CACHE_TAG } from "@/lib/products";
 import { downloadLineImage, verifySlip } from "@/lib/slipok";
 import {
   claimPaymentForUser,
@@ -417,6 +419,11 @@ async function handleSlipImage(
         "No variant IDs on order row"
       );
     }
+
+    // Payment confirmed → the Shopify order was created, so Shopify's own
+    // "Available" has dropped. Purge the shop availability cache so the size
+    // shows as sold-out on the next shop load instead of after the cache TTL.
+    revalidateTag(PRODUCTS_CACHE_TAG, { expire: 0 });
 
     // 8. Return confirmation (deadline computed from the just-set Paid At;
     //    fall back to "now" so the deadline block is always present)
@@ -869,6 +876,9 @@ export async function POST(request: NextRequest) {
     // Piggyback: check and expire old PENDING orders on every webhook call
     try {
       const expired = await findExpiredOrders(5);
+      // Expiring a PENDING order frees its reserved units, so the size may be
+      // back in stock — purge the shop availability cache when any expire.
+      if (expired.length > 0) revalidateTag(PRODUCTS_CACHE_TAG, { expire: 0 });
       for (const eo of expired) {
         await updateOrderStatus(eo["Order ID"], "EXPIRED", "");
         console.log(`[webhook] Auto-expired: ${eo["Order ID"]}`);

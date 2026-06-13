@@ -1,3 +1,10 @@
+// Cache tag for the shop's product/availability data. The /api/products route
+// caches the heavy Shopify + Sheets reads under this tag; any flow that changes
+// availability (new order, payment→Shopify order, auto-cancel) purges it via
+// revalidateTag so the shop reflects sold-out status immediately instead of
+// waiting out a time-based cache.
+export const PRODUCTS_CACHE_TAG = "products-availability";
+
 // Standard apparel size order, smallest → largest. Shopify returns variants
 // in an arbitrary order, so we sort by this to keep S → M → L → XL everywhere
 // (LIFF shop size buttons AND the Google Sheets "Stock" tab).

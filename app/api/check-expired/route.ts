@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
+import { PRODUCTS_CACHE_TAG } from "@/lib/products";
 import {
   getOrder,
   findExpiredOrders,
@@ -58,6 +60,8 @@ export async function GET(request: NextRequest) {
 
       const didExpire = await expireOrder(order, client);
       await refreshStockTab();
+      // Freed the soft-reserve → refresh shop availability immediately.
+      if (didExpire) revalidateTag(PRODUCTS_CACHE_TAG, { expire: 0 });
       return NextResponse.json({ expired: didExpire ? 1 : 0 });
     }
 
@@ -71,6 +75,9 @@ export async function GET(request: NextRequest) {
 
     // Keep the Stock overview tab live on every cron tick (even if nothing expired)
     await refreshStockTab();
+
+    // Any expiry freed reserved units → refresh shop availability immediately.
+    if (count > 0) revalidateTag(PRODUCTS_CACHE_TAG, { expire: 0 });
 
     return NextResponse.json({ expired: count });
   } catch (err) {
