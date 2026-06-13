@@ -1117,6 +1117,54 @@ export async function refreshStockTab(): Promise<void> {
   console.log(`[sheets] refreshStockTab: wrote ${newRows.length} variant rows`);
 }
 
+/**
+ * Decrement the "Stock" tab's "Shopify Stock" by the paid quantity for each
+ * variant in an order's "Variant IDs" string (format `vid:qty,vid:qty`).
+ *
+ * Called from claimPaymentForUser INSIDE the same withLock() section the order
+ * guard runs under. The guard computes availability as `Shopify Stock − PENDING`.
+ * The instant an order flips PENDING → PAID it drops out of the PENDING count,
+ * so unless its units also leave "Shopify Stock" right here, a concurrent buyer
+ * would briefly see them as available again (oversell). Deducting in-lock closes
+ * that sub-second window. refreshStockTab() later SETS these cells from live
+ * Shopify (whose inventory already nets paid orders), so this is never
+ * double-applied — a SET overwrites, it does not subtract again.
+ */
+export async function commitSaleToStockTab(
+  doc: GoogleSpreadsheet,
+  variantIdsStr: string
+): Promise<void> {
+  const want: Record<string, number> = {};
+  for (const part of (variantIdsStr || "").split(",")) {
+    const [vid, q] = part.trim().split(":");
+    if (!vid) continue;
+    want[vid] = (want[vid] || 0) + (parseInt(q, 10) || 1);
+  }
+  if (Object.keys(want).length === 0) return;
+
+  const stockSheet = doc.sheetsByTitle["Stock"];
+  if (!stockSheet) return;
+  try { await stockSheet.loadHeaderRow(); } catch { return; }
+  const rows = await stockSheet.getRows();
+
+  const now = nowBKK();
+  for (const row of rows) {
+    const vid = (row.get("Variant ID") || "").trim();
+    const dec = want[vid];
+    if (!dec) continue;
+    const current = Number(row.get("Shopify Stock") || 0);
+    const next = Math.max(0, current - dec);
+    row.set("Shopify Stock", next);
+    // Available = Shopify Stock − Reserved(PENDING); keep it consistent in-place.
+    const reserved = Number(row.get("Reserved") || 0);
+    row.set("Available", Math.max(0, next - reserved));
+    // Sold tracks cumulative PAID units for the overview.
+    row.set("Sold", Number(row.get("Sold") || 0) + dec);
+    row.set("Last Updated", now);
+    await row.save();
+  }
+}
+
 /* ──────────────────────────────────────────────────────────────
  * CONCURRENCY SAFETY — added to close two race conditions found by
  * the load test:
@@ -1284,15 +1332,21 @@ export async function createOrderGuarded(
       await ordersSheet.setHeaderRow([...existingHeaders, ...missingHeaders]);
     }
 
-    // ── committed (PENDING + PAID) per variant — from the live Orders read ──
-    const committed: Record<string, number> = {};
+    // ── reserved (PENDING only) per variant — from the live Orders read ──
+    // We subtract ONLY unpaid holds, not PAID. A PAID order has already been
+    // committed to Shopify (auto-created order → Shopify "Available" dropped)
+    // AND its units are deducted from the Stock tab's "Shopify Stock" the moment
+    // payment is claimed (see claimPaymentForUser). So `stock` below already
+    // reflects every paid sale; counting PAID again here would double-count and
+    // wrongly reject in-stock sizes.
+    const pendingQty: Record<string, number> = {};
     for (const row of orderRows) {
       const status = (row.get("Status") || "").toUpperCase();
-      if (status !== "PENDING" && status !== "PAID") continue;
+      if (status !== "PENDING") continue;
       for (const part of (row.get("Variant IDs") || "").split(",")) {
         const [vid, q] = part.trim().split(":");
         if (!vid) continue;
-        committed[vid] = (committed[vid] || 0) + (parseInt(q, 10) || 1);
+        pendingQty[vid] = (pendingQty[vid] || 0) + (parseInt(q, 10) || 1);
       }
     }
 
@@ -1312,7 +1366,7 @@ export async function createOrderGuarded(
       want[it.variantId] = (want[it.variantId] || 0) + it.qty;
     }
     for (const [vid, qty] of Object.entries(want)) {
-      const available = (stock[vid] ?? 0) - (committed[vid] ?? 0);
+      const available = (stock[vid] ?? 0) - (pendingQty[vid] ?? 0);
       if (qty > available) {
         return {
           ok: false,
@@ -1417,6 +1471,22 @@ export async function claimPaymentForUser(
         row.set("Paid At", now);
         row.set("Updated At", now);
         await row.save();
+
+        // Commit the sale against the Stock tab IMMEDIATELY, inside this same
+        // withLock critical section that createOrderGuarded also runs under. The
+        // guard subtracts only PENDING holds from "Shopify Stock", so the paid
+        // units must leave "Shopify Stock" right now — otherwise a concurrent
+        // order could see them as still available (oversell). Doing it in-lock
+        // means no order's stock check can interleave between the PAID flip and
+        // this deduction. refreshStockTab later SETS (not subtracts) these cells
+        // from live Shopify, so this never double-deducts.
+        try {
+          await commitSaleToStockTab(doc, row.get("Variant IDs") || "");
+        } catch (stockErr) {
+          // Non-fatal: the order is already PAID and will be reconciled by the
+          // next refreshStockTab. Log loudly so a missed deduction is visible.
+          console.error("[claimPayment] Stock deduction failed (will reconcile on refresh):", stockErr);
+        }
         return {
           ok: true,
           order: {
