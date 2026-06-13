@@ -66,134 +66,77 @@ function fallbackReply() {
       altText: "UNIT-01 — How can we help?",
       contents: {
         type: "bubble",
-        size: "mega",
-        header: {
-          type: "box",
-          layout: "vertical",
-          backgroundColor: "#ECE7E1",
-          paddingTop: "12px",
-          paddingBottom: "12px",
-          paddingStart: "16px",
-          paddingEnd: "16px",
-          contents: [
-            { type: "text", text: "UNIT-01", size: "sm", weight: "bold", color: "#8A8A86" },
-          ],
-        },
+        size: "kilo",
         body: {
           type: "box",
           layout: "vertical",
-          paddingAll: "0px",
+          paddingAll: "none",
           contents: [
+            // Header
             {
               type: "box",
               layout: "vertical",
-              paddingStart: "16px",
-              paddingEnd: "16px",
-              paddingTop: "15px",
-              paddingBottom: "12px",
+              backgroundColor: "#E5E0DD",
+              paddingAll: "lg",
               contents: [
-                { type: "text", text: "How can we help?", size: "lg", weight: "bold", color: "#1A1A1A" },
-                { type: "text", text: "Select an option below", size: "sm", color: "#9B9B97", margin: "xs" },
+                { type: "text", text: "UNIT-01", size: "xxs", color: "#555555", weight: "bold" },
               ],
             },
-            { type: "separator", color: "#EFEFED" },
+            // Body
+            {
+              type: "box",
+              layout: "vertical",
+              paddingAll: "lg",
+              contents: [
+                { type: "text", text: "How can we help?", size: "sm", color: "#1A1A1A", weight: "bold" },
+                { type: "text", text: "Select an option below", size: "xxs", color: "#999999", margin: "xs" },
+              ],
+            },
+            { type: "separator", color: "#EBE7E4" },
+            // Option 1: How to order → open shop (LIFF)
             {
               type: "box",
               layout: "horizontal",
-              alignItems: "center",
-              paddingTop: "13px",
-              paddingBottom: "13px",
-              paddingStart: "16px",
-              paddingEnd: "16px",
+              paddingAll: "lg",
               action: { type: "uri", label: "How to order", uri: "https://liff.line.me/2010192572-jfj8ev6c" },
               contents: [
-                {
-                  type: "box",
-                  layout: "vertical",
-                  flex: 1,
-                  contents: [
-                    {
-                      type: "box",
-                      layout: "baseline",
-                      contents: [
-                        { type: "text", text: "[ 1 ]", flex: 0, size: "md", weight: "bold", color: "#1A1A1A" },
-                        { type: "text", text: "How to order", flex: 0, size: "md", weight: "bold", color: "#1A1A1A", margin: "md" },
-                      ],
-                    },
-                    { type: "text", text: "OPEN SHOP", size: "xxs", color: "#AEA9A1", margin: "sm" },
-                  ],
-                },
-                { type: "text", text: "›", flex: 0, size: "xl", color: "#C2C2C0", align: "end", gravity: "center" },
+                { type: "text", text: "[ 1 ]", size: "xs", color: "#1A1A1A", weight: "bold", flex: 0 },
+                { type: "text", text: "How to order", size: "xs", color: "#1A1A1A", weight: "bold", margin: "lg", flex: 1 },
+                { type: "text", text: "›", size: "sm", color: "#C4BFBB", flex: 0, align: "end" },
               ],
             },
-            { type: "separator", color: "#EFEFED" },
+            { type: "separator", color: "#EBE7E4" },
+            // Option 2: View products → CATALOG
             {
               type: "box",
               layout: "horizontal",
-              alignItems: "center",
-              paddingTop: "13px",
-              paddingBottom: "13px",
-              paddingStart: "16px",
-              paddingEnd: "16px",
+              paddingAll: "lg",
               action: { type: "message", label: "View products", text: "CATALOG" },
               contents: [
-                {
-                  type: "box",
-                  layout: "vertical",
-                  flex: 1,
-                  contents: [
-                    {
-                      type: "box",
-                      layout: "baseline",
-                      contents: [
-                        { type: "text", text: "[ 2 ]", flex: 0, size: "md", weight: "bold", color: "#1A1A1A" },
-                        { type: "text", text: "View products", flex: 0, size: "md", weight: "bold", color: "#1A1A1A", margin: "md" },
-                      ],
-                    },
-                    { type: "text", text: "CATALOG", size: "xxs", color: "#AEA9A1", margin: "sm" },
-                  ],
-                },
-                { type: "text", text: "›", flex: 0, size: "xl", color: "#C2C2C0", align: "end", gravity: "center" },
+                { type: "text", text: "[ 2 ]", size: "xs", color: "#1A1A1A", weight: "bold", flex: 0 },
+                { type: "text", text: "View products", size: "xs", color: "#1A1A1A", weight: "bold", margin: "lg", flex: 1 },
+                { type: "text", text: "›", size: "sm", color: "#C4BFBB", flex: 0, align: "end" },
               ],
             },
-            { type: "separator", color: "#EFEFED" },
+            { type: "separator", color: "#EBE7E4" },
+            // Option 3: Contact us
             {
               type: "box",
               layout: "horizontal",
-              alignItems: "center",
-              paddingTop: "13px",
-              paddingBottom: "13px",
-              paddingStart: "16px",
-              paddingEnd: "16px",
+              paddingAll: "lg",
               action: { type: "message", label: "Contact us", text: "contact us" },
               contents: [
-                {
-                  type: "box",
-                  layout: "vertical",
-                  flex: 1,
-                  contents: [
-                    {
-                      type: "box",
-                      layout: "baseline",
-                      contents: [
-                        { type: "text", text: "[ 3 ]", flex: 0, size: "md", weight: "bold", color: "#1A1A1A" },
-                        { type: "text", text: "Contact us", flex: 0, size: "md", weight: "bold", color: "#1A1A1A", margin: "md" },
-                      ],
-                    },
-                    { type: "text", text: "SUPPORT", size: "xxs", color: "#AEA9A1", margin: "sm" },
-                  ],
-                },
-                { type: "text", text: "›", flex: 0, size: "xl", color: "#C2C2C0", align: "end", gravity: "center" },
+                { type: "text", text: "[ 3 ]", size: "xs", color: "#1A1A1A", weight: "bold", flex: 0 },
+                { type: "text", text: "Contact us", size: "xs", color: "#1A1A1A", weight: "bold", margin: "lg", flex: 1 },
+                { type: "text", text: "›", size: "sm", color: "#C4BFBB", flex: 0, align: "end" },
               ],
             },
-            { type: "separator", color: "#EFEFED" },
+            { type: "separator", color: "#EBE7E4" },
+            // Footer
             {
               type: "box",
               layout: "horizontal",
-              paddingTop: "11px",
-              paddingBottom: "11px",
-              paddingStart: "16px",
-              paddingEnd: "16px",
+              paddingAll: "lg",
               contents: [
                 { type: "text", text: "UNIT-01 — OFFICIAL", size: "xxs", color: "#AEA9A1", flex: 1 },
                 { type: "text", text: "22-05-1-A", size: "xxs", color: "#C4BFB7", align: "end" },
