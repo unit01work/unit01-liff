@@ -70,13 +70,47 @@ function matchKeyword(text: string, keywords: string[]): boolean {
   return keywords.some((k) => lower.includes(k));
 }
 
-// Customer-facing reply when entering chat-with-team mode. No time promise
-// (so it's not a lie); MENU is the documented breakout keyword.
+// Customer-facing reply when entering chat-with-team mode. A Flex card with a
+// "Back to shop" button (postback action=exit_chat) so the customer can leave
+// the handoff with one tap — keyword breakout still works as a backup. No time
+// promise (so it's not a lie).
 function chatEnterReply() {
   return [
     {
-      type: "text" as const,
-      text: "Got it — our team will reply here.\nType MENU anytime to return to the shop.",
+      type: "flex",
+      altText: "You're now chatting with our team",
+      contents: {
+        type: "bubble",
+        size: "kilo",
+        body: {
+          type: "box",
+          layout: "vertical",
+          spacing: "md",
+          contents: [
+            { type: "text", text: "LIVE CHAT", weight: "bold", size: "sm", color: "#C47237" },
+            { type: "text", text: "Our team will reply here.", size: "md", color: "#1A1A1A", wrap: true },
+            { type: "text", text: "Just send your message.", size: "sm", color: "#999999", wrap: true },
+          ],
+        },
+        footer: {
+          type: "box",
+          layout: "vertical",
+          contents: [
+            {
+              type: "button",
+              style: "primary",
+              height: "md",
+              color: "#C47237",
+              action: {
+                type: "postback",
+                label: "Back to shop",
+                data: "action=exit_chat",
+                displayText: "Menu",
+              },
+            },
+          ],
+        },
+      },
     },
   ];
 }
@@ -814,6 +848,14 @@ export async function POST(request: NextRequest) {
             const uid = params.get("uid") || "";
             await endChatSession(uid);
             messages = [{ type: "text" as const, text: "บอทกลับมาทำงานกับลูกค้าแล้ว" }];
+            break;
+          }
+          case "exit_chat": {
+            // Customer tapped "Back to shop" on the live-chat card → leave the
+            // handoff and show the shop menu (same as a keyword breakout).
+            const exitUid = event.source?.userId || "";
+            await endChatSession(exitUid);
+            messages = fallbackReply();
             break;
           }
           case "select_size": {

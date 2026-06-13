@@ -183,6 +183,18 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 
 ---
 
+## Chat with team — human handoff + ปุ่มจบแชท (branch `feature/chat-handoff` — รอ merge)
+แก้บั๊กบอท stateless ที่กด "Chat with team" แล้วพิมพ์ต่อ → วนลูป fallback flex ไม่จบ ลูกค้าไม่ถึงคนจริง. โหมด handoff ต่อ user: เข้าโหมด → บอทเงียบเฉพาะ free text → เจ้าของตอบผ่าน LINE OA Manager → จบด้วยปุ่ม/keyword/timeout. **แตะแค่ส่วนรับข้อความใน `app/api/webhook/route.ts` + โมดูลใหม่ `lib/chat-session.ts` (ไม่ import `lib/sheets.ts` ถอดทิ้งทั้งก้อนได้)** ไม่แตะ flow จ่ายเงิน/ออเดอร์/auto-cancel/daily-pull/edit-lock
+- **State:** แท็บใหม่ `chat_sessions` ในชีตเดิม คอลัมน์ `userId | status | enteredAt | lastCustomerMsgAt`. timeout 60 นาที เช็ค lazy ตอนข้อความถัดไป (ไม่ใช้ cron)
+- **เข้าโหมด** (postback `action=chat_team`): upsert session active → ดึงโปรไฟล์ลูกค้า (LINE Profile API) → push การ์ด Flex หา `ADMIN_LINE_USER_ID` (ชื่อ+รูป+ปุ่มแดง "จบแชท") → ตอบลูกค้าด้วย **Flex card** (`chatEnterReply()`): `LIVE CHAT` (หนา/ส้ม `#C47237`) / `Our team will reply here.` / `Just send your message.` (เทาเล็ก) + ปุ่มส้ม **"Back to shop"** (postback `action=exit_chat`)
+- **ระหว่างโหมด** (session gate ก่อน dispatch ปกติ): free text → `touchChatSession` + **เงียบ** (ไม่ตอบ) · **สลิป/รูป → ตรวจสลิปปกติ ไม่เงียบ** (กันดรอปเงิน) · sticker/อื่น → เงียบ · keyword breakout (`CHAT_BREAKOUT_KEYWORDS`: menu/เมนู/catalog, shop/สั่งซื้อ/สินค้า/ร้าน, status/สถานะ/ออเดอร์, contact/ติดต่อ) → ลบ session ทำ command ปกติ · postback ทุกชนิด → ทำงานปกติ (อยู่นอก gate)
+- **ออกจากโหมด 3 ทาง:** (1) เจ้าของกดปุ่ม `end_chat&uid={userId}` บนการ์ด → ลบ session uid นั้น (รองรับหลายแชทพร้อมกัน) ตอบ admin `บอทกลับมาทำงานกับลูกค้าแล้ว` (2) ลูกค้ากดปุ่ม `exit_chat` หรือพิมพ์ keyword → ลบ session + เด้งเมนูร้าน (`fallbackReply()`) (3) timeout 60 นาที
+- **ปุ่ม "เปิดแชทกับลูกค้า" (uri chat.line.biz) ตัดออก** — ทดสอบขั้น 0 แล้ว deep-link จาก webhook userId คืน 404 (chat.line.biz ใช้ id คนละชุดกับ Messaging API userId) การ์ดเหลือชื่อ+รูป+ปุ่มจบแชทพอหาแชทใน OA Manager เจอ
+- **เทสต์บน Vercel preview:** chat-handoff (เข้าโหมด/การ์ด/เงียบ/keyword/exit_chat/จบแชท) ทำงานครบ. **สลิปบน preview ตรวจไม่ได้** เพราะ env `SLIPOK_API_KEY`+`SLIPOK_BRANCH_ID` scope เฉพาะ Production (preview ส่ง `apikey/undefined` → SlipOK 422) — ไม่ใช่บั๊กโค้ด, บน production ทำงานปกติ
+- ตรวจแล้ว `npx tsc --noEmit` ผ่าน (exit 0)
+
+---
+
 ## Monitoring / Guards (กันปัญหา sync ไม่ให้เกิดอีก)
 ออกแบบเป็น 4 ชั้น หลังเจอบั๊ก "จ่ายแล้ว/แก้แล้วแต่ Shopify ไม่อัพเดทแบบเงียบ" 2 รอบ:
 1. **ห้ามเงียบ (in-line) + read-back verify:** ทุกการเขียน Shopify (สร้าง order / change size / edit shipping) เช็คผลจริง พังเมื่อไหร่ → push LINE เจ้าของ + เขียน `FAILED` ลง Sheet (คอลัมน์ Shopify Order ID ตอนสร้าง, คอลัมน์ "Sync Status" ตอนแก้). **read-back verify:** หลังแก้ size/ที่อยู่สำเร็จ → อ่านออเดอร์จาก Shopify กลับมาเช็คซ้ำว่าค่า *ลงจริง* (size: new variant active + old variant หาย / ที่อยู่: address1/address2/zip ตรง) ไม่ใช่แค่เชื่อ mutation ตอบ ok — ไม่ตรง = ถือว่า FAILED + LINE. กัน "สำเร็จเงียบแต่ไม่ลง" (`getShopifyOrderSnapshot` ใน webhook size handler + order PUT shipping handler)
