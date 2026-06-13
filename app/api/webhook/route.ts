@@ -25,6 +25,7 @@ import {
   syncPaidOrderToShopify,
   alertOwnerOrderFailed,
   alertOwnerEditFailed,
+  alertOwnerOrphanPayment,
 } from "@/lib/order-sync";
 import {
   buildContactFlex,
@@ -244,7 +245,7 @@ function replyConfirmPayment(orderId: string, amount: number, paidAt: string) {
           contents: [
             { type: "text", text: "ORDER CONFIRMED   [ Paid ]", size: "xs", color: "#5B805E", weight: "bold" },
             { type: "text", text: `${id} · ฿${amount}`, size: "sm", color: "#444444" },
-            { type: "text", text: "YOUR FIRST UNIT.\nUSE IT WELL.", size: "md", color: "#1A1714", weight: "bold", wrap: true, margin: "md" },
+            { type: "text", text: "YOUR FIRST UNIT. USE IT WELL.", size: "sm", color: "#1A1714", weight: "bold", wrap: true, margin: "md" },
           ],
         },
       },
@@ -361,7 +362,12 @@ async function handleSlipImage(
         console.log("[slip] Duplicate transRef:", transRef);
         return replyDuplicateSlip();
       }
+      // SlipOK already verified this is a REAL payment (we're past the validity
+      // check above), but no PENDING order matched — money is in with no order
+      // (likely expired before the slip arrived, or amount mismatch). Don't let it
+      // vanish silently: alert the owner with everything needed to reconcile.
       console.log("[slip] No matching order for userId:", userId, "amount:", amount);
+      await alertOwnerOrphanPayment({ amount, transRef, userId, when: nowBKK() });
       return replyNoMatchingOrder(amount);
     }
     const order = claim.order!;
