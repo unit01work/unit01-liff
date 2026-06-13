@@ -201,6 +201,16 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 
 ---
 
+## Payment replies เป็น Flex card (merge + ขึ้น production แล้ว 2026-06-14)
+เปลี่ยนข้อความตอบหลังส่งสลิป "จ่ายสำเร็จ / สลิปไม่ผ่าน" จาก plain text → Flex card. **แตะแค่ "ข้อความตอบ" ใน `app/api/webhook/route.ts` 3 ฟังก์ชัน** ไม่แตะ logic ตรวจสลิป/SlipOK/สร้าง Shopify order/claimPaymentForUser
+- **`replyConfirmPayment()` (จ่ายสำเร็จ):** ข้อความ1 = Flex สีเขียว `#5B805E` (ตัวอักษรเขียวล้วน ไม่มีแถบสีบน ไม่มีปุ่ม): kicker `ORDER CONFIRMED   [ Paid ]` (xs เขียว) / `#UT-xxxxxx · ฿xxxx` (sm เทา) / `YOUR FIRST UNIT. USE IT WELL.` (md หนา). **ข้อความ2 (เดดไลน์ edit-lock) ยังเป็น plain text แยกเหมือนเดิม** (owned by edit-lock — ไม่แตะ)
+- **`replyInvalidSlip()` (สลิปไม่ผ่าน):** Flex สีแดง `#874545` (ไม่มีแถบสีบน): kicker `[ x ]  SLIP NOT VERIFIED` (xs แดง) / `We couldn't read your slip — please send it again.` (sm) + ปุ่มกล่องเทา `#3A3A3A` ตัวเล็ก `Still stuck? Contact us` → **reuse flow เดิม** action `message` text `"contact us"` → `CONTACT_KEYWORDS` → `buildContactMenuNoOrder()` (เมนู ORDER SUPPORT เดิม) ไม่สร้างการ์ด contact/handler ใหม่
+- **คงเป็น text เดิม (ไม่อยู่ใน mockup):** `replyNoMatchingOrder` (NO MATCHING ORDER), `replyDuplicateSlip` (SLIP ALREADY USED)
+- return type ของ `handleSlipImage` ขยายเป็น `any[]` (รองรับ text+flex ปนกัน), `messages` reply cast `as any` อยู่แล้ว
+- ตรวจแล้ว `npx tsc --noEmit` ผ่าน (exit 0) · branch `feature/payment-flex` → fast-forward เข้า main commit `128d797`
+
+---
+
 ## Monitoring / Guards (กันปัญหา sync ไม่ให้เกิดอีก)
 ออกแบบเป็น 4 ชั้น หลังเจอบั๊ก "จ่ายแล้ว/แก้แล้วแต่ Shopify ไม่อัพเดทแบบเงียบ" 2 รอบ:
 1. **ห้ามเงียบ (in-line) + read-back verify:** ทุกการเขียน Shopify (สร้าง order / change size / edit shipping) เช็คผลจริง พังเมื่อไหร่ → push LINE เจ้าของ + เขียน `FAILED` ลง Sheet (คอลัมน์ Shopify Order ID ตอนสร้าง, คอลัมน์ "Sync Status" ตอนแก้). **read-back verify:** หลังแก้ size/ที่อยู่สำเร็จ → อ่านออเดอร์จาก Shopify กลับมาเช็คซ้ำว่าค่า *ลงจริง* (size: new variant active + old variant หาย / ที่อยู่: address1/address2/zip ตรง) ไม่ใช่แค่เชื่อ mutation ตอบ ok — ไม่ตรง = ถือว่า FAILED + LINE. กัน "สำเร็จเงียบแต่ไม่ลง" (`getShopifyOrderSnapshot` ใน webhook size handler + order PUT shipping handler)
