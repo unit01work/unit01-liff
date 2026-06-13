@@ -39,6 +39,13 @@ import {
   buildLockedMessage,
   nowBKK,
 } from "@/lib/edit-lock";
+import {
+  enterChatSession,
+  getActiveChatSession,
+  touchChatSession,
+  endChatSession,
+  notifyAdminNewChat,
+} from "@/lib/chat-session";
 
 const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}`;
 
@@ -48,9 +55,30 @@ const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}`;
 // Contact menu trigger so "contact us" still opens the in-chat support menu.
 const CONTACT_KEYWORDS = ["contact", "ติดต่อ", "contact us"];
 
+// Typing any of these while in chat-with-team mode breaks out of the handoff
+// (session ends) and the message is handled normally — "return to the shop".
+// The customer-facing handoff reply tells them to type MENU for exactly this.
+const CHAT_BREAKOUT_KEYWORDS = [
+  "menu", "เมนู", "catalog",
+  "shop", "สั่งซื้อ", "สินค้า", "ร้าน",
+  "status", "สถานะ", "ออเดอร์",
+  "contact", "ติดต่อ",
+];
+
 function matchKeyword(text: string, keywords: string[]): boolean {
   const lower = text.toLowerCase().trim();
   return keywords.some((k) => lower.includes(k));
+}
+
+// Customer-facing reply when entering chat-with-team mode. No time promise
+// (so it's not a lie); MENU is the documented breakout keyword.
+function chatEnterReply() {
+  return [
+    {
+      type: "text" as const,
+      text: "Got it — our team will reply here.\nType MENU anytime to return to the shop.",
+    },
+  ];
 }
 
 /* ── reply builders ── */
@@ -580,13 +608,6 @@ async function handleTrackOrder(orderId: string) {
   }];
 }
 
-function handleChatTeam() {
-  return [{
-    type: "text" as const,
-    text: "Please type your message.\nWe'll reply shortly.",
-  }];
-}
-
 /**
  * Get unfulfilled (not yet shipped) PAID orders for a user.
  * Checks Shopify fulfillment status for each order.
@@ -778,9 +799,23 @@ export async function POST(request: NextRequest) {
           case "track":
             messages = await handleTrackOrder(postbackOrderId);
             break;
-          case "chat_team":
-            messages = handleChatTeam();
+          case "chat_team": {
+            // Enter human-handoff mode: bot goes silent on free text until the
+            // owner ends it / customer breaks out / 60-min timeout.
+            const chatUserId = event.source?.userId || "";
+            await enterChatSession(chatUserId);
+            // Push the admin card (name + photo + จบแชท button) — fire-and-forget.
+            await notifyAdminNewChat(chatUserId, "(เปิดแชทกับทีม)");
+            messages = chatEnterReply();
             break;
+          }
+          case "end_chat": {
+            // Owner tapped "จบแชท" on the admin card → resume bot for that user.
+            const uid = params.get("uid") || "";
+            await endChatSession(uid);
+            messages = [{ type: "text" as const, text: "บอทกลับมาทำงานกับลูกค้าแล้ว" }];
+            break;
+          }
           case "select_size": {
             const size = params.get("size") || "";
             const variantId = params.get("variantId") || "";
@@ -816,6 +851,32 @@ export async function POST(request: NextRequest) {
 
       // ── Message events ──
       if (event.type !== "message") continue;
+
+      // ── Chat-with-team handoff gate ──
+      // If this user is in an active handoff session, the bot stays SILENT on
+      // free text only. Slips (images) and breakout keywords still work; the
+      // 60-min timeout is enforced lazily inside getActiveChatSession.
+      const sessionUserId = event.source?.userId || "";
+      const activeSession = await getActiveChatSession(sessionUserId);
+      if (activeSession) {
+        if (event.message.type === "text") {
+          const t: string = event.message.text;
+          if (matchKeyword(t, CHAT_BREAKOUT_KEYWORDS)) {
+            // Customer typed a command keyword → leave handoff, handle normally.
+            await endChatSession(sessionUserId);
+          } else {
+            // Free text → keep session alive and stay silent (owner replies via OA).
+            await touchChatSession(sessionUserId);
+            continue;
+          }
+        } else if (event.message.type === "image") {
+          // Slip / photo → never silence; fall through to normal slip handling.
+        } else {
+          // Sticker / other → keep session alive, stay silent.
+          await touchChatSession(sessionUserId);
+          continue;
+        }
+      }
 
       if (event.message.type === "text") {
         const text: string = event.message.text;
