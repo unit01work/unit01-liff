@@ -374,7 +374,16 @@ async function handleSlipImage(
       const slipDateTime = [slipResult.data.transDate, slipResult.data.transTime]
         .filter(Boolean)
         .join(" ");
-      await appendOrphanPayment({ amount, transRef, userId, senderName, sendingBank, slipDateTime });
+      // Best-effort: fetch the customer's LINE display name so the owner can
+      // find/contact them. Never block the alert if the profile lookup fails.
+      let customerName = "";
+      try {
+        const profile = await getLineClient().getProfile(userId);
+        customerName = profile?.displayName || "";
+      } catch (e) {
+        console.error("[slip] Could not fetch customer profile:", e);
+      }
+      await appendOrphanPayment({ amount, transRef, userId, senderName, sendingBank, slipDateTime, customerName });
       await alertOwnerOrphanPayment({
         amount,
         transRef,
@@ -383,6 +392,7 @@ async function handleSlipImage(
         senderName,
         sendingBank,
         slipDateTime,
+        customerName,
       });
       return replyNoMatchingOrder(amount);
     }

@@ -5,6 +5,118 @@
 const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID || "2010192572-jfj8ev6c"}`;
 
 /**
+ * Owner alert (Flex) — a verified slip whose money could NOT be matched to any
+ * PENDING order (orphan payment). Sent ONLY to the shop owner so they can
+ * reconcile/refund. Designed for fast scanning: warning header, then clean
+ * label/value rows. Includes the customer's LINE display name + userId so the
+ * owner can find/contact them.
+ */
+export function buildOrphanPaymentFlex(args: {
+  amount: number;
+  transRef: string;
+  userId: string;
+  receivedAt: string;
+  slipDateTime?: string;
+  senderName?: string;
+  sendingBank?: string;
+  customerName?: string;
+}) {
+  const { amount, transRef, userId, receivedAt, slipDateTime, senderName, sendingBank, customerName } = args;
+  const sender = [senderName, sendingBank].filter(Boolean).join(" / ");
+
+  // One label/value row. `mono` widens the value for long IDs/refs.
+  const row = (label: string, value: string, mono = false) => ({
+    type: "box",
+    layout: "horizontal",
+    margin: "md",
+    contents: [
+      { type: "text", text: label, size: "xs", color: "#999999", flex: 4 },
+      {
+        type: "text",
+        text: value || "-",
+        size: "xs",
+        color: "#1A1A1A",
+        weight: "bold",
+        flex: 7,
+        wrap: true,
+        align: "end",
+        ...(mono ? { size: "xxs" } : {}),
+      },
+    ],
+  });
+
+  return {
+    type: "flex",
+    altText: `⚠️ เงินเข้าไม่พบออเดอร์ ฿${amount} (${customerName || userId.slice(0, 8)})`,
+    contents: {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "none",
+        contents: [
+          // Header (warning)
+          {
+            type: "box",
+            layout: "vertical",
+            backgroundColor: "#C62828",
+            paddingAll: "lg",
+            contents: [
+              { type: "text", text: "⚠️ เงินเข้า — ไม่พบออเดอร์", size: "sm", color: "#FFFFFF", weight: "bold" },
+              { type: "text", text: "SlipOK ผ่าน แต่จับคู่ออเดอร์ PENDING ไม่ได้", size: "xxs", color: "#FFCDD2", margin: "xs", wrap: true },
+            ],
+          },
+          // Amount (prominent)
+          {
+            type: "box",
+            layout: "vertical",
+            paddingStart: "lg",
+            paddingEnd: "lg",
+            paddingTop: "lg",
+            contents: [
+              { type: "text", text: "ยอดเงิน", size: "xxs", color: "#999999" },
+              { type: "text", text: `฿${amount}`, size: "xxl", color: "#C62828", weight: "bold" },
+            ],
+          },
+          // Details
+          {
+            type: "box",
+            layout: "vertical",
+            paddingStart: "lg",
+            paddingEnd: "lg",
+            paddingTop: "md",
+            paddingBottom: "lg",
+            contents: [
+              row("เวลาในสลิป", slipDateTime || "-"),
+              row("เวลาที่ระบบรับ", receivedAt),
+              { type: "separator", margin: "md", color: "#EBE7E4" },
+              row("ลูกค้า (LINE)", customerName || "-"),
+              row("LINE userId", userId, true),
+              { type: "separator", margin: "md", color: "#EBE7E4" },
+              row("คนโอน", sender || "-"),
+              row("Ref สลิป", transRef || "-", true),
+            ],
+          },
+          { type: "separator", color: "#EBE7E4" },
+          // Footer note
+          {
+            type: "box",
+            layout: "vertical",
+            paddingAll: "lg",
+            contents: [
+              { type: "text", text: "⛔️ อาจหมดอายุไปแล้ว หรือยอดไม่ตรง", size: "xxs", color: "#C62828", wrap: true },
+              { type: "text", text: "ตรวจสอบ/ติดต่อลูกค้า/คืนเงินด้วยตนเอง", size: "xxs", color: "#777777", margin: "xs", wrap: true },
+              { type: "text", text: 'บันทึกไว้ในแท็บ "Orphan Payments" แล้ว', size: "xxs", color: "#AAAAAA", margin: "xs", wrap: true },
+            ],
+          },
+        ],
+      },
+    },
+  };
+}
+
+/**
  * Contact Us welcome menu — "How can we help?" with 4 options.
  */
 export function buildContactFlex(

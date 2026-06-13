@@ -1,6 +1,7 @@
 import { getLineClient } from "./line";
 import { createShopifyDraftOrder } from "./shopify";
 import { updateShopifyOrderId, type OrderRow } from "./sheets";
+import { buildOrphanPaymentFlex } from "./flex-messages";
 
 // Shop owner's LINE userId — receives an alert if a paid order fails to sync
 // to Shopify. Overridable via env; falls back to the known owner account.
@@ -88,24 +89,36 @@ export async function alertOwnerOrphanPayment(args: {
   senderName?: string;
   sendingBank?: string;
   slipDateTime?: string;
+  /** Customer's LINE display name (fetched from the LINE profile) — for findability. */
+  customerName?: string;
 }): Promise<void> {
-  const { amount, transRef, userId, when, senderName, sendingBank, slipDateTime } = args;
-  const sender = [senderName, sendingBank].filter(Boolean).join(" / ");
-  const text =
-    `⚠️ เงินเข้าแต่ไม่พบออเดอร์ที่รอชำระ\n` +
-    `(SlipOK ตรวจสลิปผ่านแล้ว แต่ระบบจับคู่ออเดอร์ PENDING ไม่ได้)\n\n` +
-    `ยอดเงิน: ฿${amount}\n` +
-    `เวลาในสลิป: ${slipDateTime || "-"}\n` +
-    `เวลาที่ระบบรับ: ${when}\n` +
-    `คนโอน: ${sender || "-"}\n` +
-    `Ref สลิป: ${transRef || "-"}\n` +
-    `LINE userId ลูกค้า: ${userId}\n\n` +
-    `⛔️ อาจเป็นออเดอร์ที่หมดอายุไปแล้ว หรือยอดไม่ตรง — ` +
-    `ตรวจสอบและติดต่อลูกค้า/คืนเงินด้วยตนเอง\n` +
-    `(บันทึกไว้ในแท็บ "Orphan Payments" ในชีตแล้ว)`;
-  const sent = await pushOwner(text);
-  if (sent) console.log("[order-sync] Owner alerted about orphan payment:", transRef, "฿" + amount);
-  else console.error("[order-sync] Could not alert owner about orphan payment:", transRef);
+  const { amount, transRef, userId, when, senderName, sendingBank, slipDateTime, customerName } = args;
+  if (
+    !OWNER_LINE_USER_ID ||
+    !process.env.LINE_CHANNEL_ACCESS_TOKEN ||
+    process.env.LINE_CHANNEL_ACCESS_TOKEN === "YOUR_CHANNEL_ACCESS_TOKEN_HERE"
+  ) {
+    console.error("[order-sync] Cannot alert owner (orphan) — missing LINE token / owner id");
+    return;
+  }
+  const flex = buildOrphanPaymentFlex({
+    amount,
+    transRef,
+    userId,
+    receivedAt: when,
+    slipDateTime,
+    senderName,
+    sendingBank,
+    customerName,
+  });
+  try {
+    const cl = getLineClient();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await cl.pushMessage({ to: OWNER_LINE_USER_ID, messages: [flex as any] });
+    console.log("[order-sync] Owner alerted about orphan payment:", transRef, "฿" + amount);
+  } catch (e) {
+    console.error("[order-sync] Could not alert owner about orphan payment:", transRef, e);
+  }
 }
 
 /**

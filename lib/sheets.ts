@@ -982,7 +982,7 @@ export async function appendStockLog(entry: StockLogEntry): Promise<void> {
 
 const ORPHAN_PAYMENT_HEADERS = [
   "Received At", "Amount", "Slip Date", "Slip Ref",
-  "Sender Name", "Sending Bank", "LINE User ID", "Status",
+  "Sender Name", "Sending Bank", "Customer Name", "LINE User ID", "Status",
 ];
 
 export interface OrphanPaymentEntry {
@@ -993,6 +993,8 @@ export interface OrphanPaymentEntry {
   slipDateTime?: string;
   senderName?: string;
   sendingBank?: string;
+  /** Customer's LINE display name (fetched from the LINE profile) — for findability. */
+  customerName?: string;
 }
 
 /**
@@ -1017,6 +1019,7 @@ export async function appendOrphanPayment(entry: OrphanPaymentEntry): Promise<vo
       "Slip Ref": entry.transRef || "",
       "Sender Name": entry.senderName || "",
       "Sending Bank": entry.sendingBank || "",
+      "Customer Name": entry.customerName || "",
       "LINE User ID": entry.userId || "",
       "Status": "NEW",
     });
