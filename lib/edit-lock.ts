@@ -32,11 +32,31 @@ export function nowBKK(): string {
 }
 
 /**
+ * Zero-pad a single-digit hour so the timestamp is fixed-width and therefore
+ * sorts chronologically under lexicographic (<=, >=) comparison.
+ *
+ * Google Sheets coerces our stored "YYYY-MM-DD HH:MM" into a date serial and
+ * reformats it with the pattern `yyyy-mm-dd h:mm` — a SINGLE `h` — so any order
+ * paid in hours 00–09 reads back as e.g. "2026-06-14 2:57", not "02:57". Without
+ * padding, "2:57" > "10:00" lexically ('2' > '1'), so computeEditDeadline thinks
+ * an early-morning order was paid AFTER 10:00 and rolls the deadline to the next
+ * day — leaving the order editable long past its real cutoff. (Same root cause
+ * parseSheetTimestamp guards in lib/sheets.) Pads only the hour; minutes are
+ * always two digits.
+ */
+export function normalizeStamp(stamp: string): string {
+  return (stamp || "").replace(/^(\d{4}-\d{2}-\d{2}) (\d):/, "$1 0$2:");
+}
+
+/**
  * Compute the edit deadline ("YYYY-MM-DD HH:MM") from a paid timestamp.
  * Returns "" if paidAt is missing/malformed (caller treats that as "no lock").
  */
-export function computeEditDeadline(paidAt: string): string {
-  const m = (paidAt || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+export function computeEditDeadline(paidAtRaw: string): string {
+  // Normalise first: the comparison below is lexicographic and only correct on
+  // fixed-width strings, but Sheets may emit a single-digit hour (see above).
+  const paidAt = normalizeStamp(paidAtRaw);
+  const m = paidAt.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return "";
   const [, y, mo, d] = m;
   const cutoffToday = `${y}-${mo}-${d} 10:00`;
