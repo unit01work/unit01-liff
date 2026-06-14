@@ -139,6 +139,12 @@ Date, Type (RESERVED/SOLD/RETURNED/RESTOCK), Product, Size, Variant ID, Change, 
 - `normalizePhone` (ตัวเลขล้วน, +66/66→0, สูงสุด 10 หลัก — **ห้ามใส่ maxLength ที่ input phone** ไม่งั้น paste `+66...` จะตัดเลขหาย), `normalizePostal` (5 หลัก), `isValidPhone`, `isFormValid`, `getHint`
 - ปุ่ม Confirm/Save จะ disabled จนกว่า `isFormValid` ผ่าน (ครบทุกฟิลด์ + เบอร์ถูก + รหัสไปรษณีย์ lookup เจอจริง = `postalResolved`)
 
+### Thai zip auto-fill — robust loader (`lib/load-zipcode.ts`)
+- พิมพ์รหัสไปรษณีย์ 5 หลัก → lookup ตำบล/อำเภอ/จังหวัด จาก chunk `@/lib/thai-zipcode` (~200KB) แบบ dynamic import
+- **เลิกเรียก `import("@/lib/thai-zipcode")` ตรงๆ ในฟอร์มแล้ว** — ทั้ง `ShippingForm.tsx` + `EditForm.tsx` เรียกผ่าน `loadZipLookup()` / `preloadZipLookup()` จาก `lib/load-zipcode.ts` แทน
+- **เหตุผล (บั๊กลูกค้าโหลด autofill ไม่ได้ ต้องออก-เข้า LIFF ใหม่):** ใน LIFF webview cache โหด พอ deploy ใหม่ HTML เก่าอ้าง chunk hash ที่หายไป → `import()` เด้ง ChunkLoadError แบบไม่มี `.catch()` → autofill ตายเงียบ → `postalResolved` ค้าง false → กดยืนยันไม่ได้
+- **3 ชั้นกัน:** (1) `loadZipLookup()` retry 3 ครั้ง + cache ตัวสำเร็จ + ล้าง cache เมื่อพังให้ลองใหม่ได้ · (2) `preloadZipLookup()` ใน `useEffect` ตอน mount = วอร์ม chunk ก่อนลูกค้าพิมพ์ (กันอาการต้องออก-เข้าใหม่) · (3) `.catch` graceful fallback: เปิดช่องที่อยู่ให้กรอกมือ + ตั้ง `postalResolved=true` เพื่อ**ไม่ล็อกลูกค้า** — ขึ้น production แล้ว 2026-06-14
+
 ---
 
 ## Contact Us System (เสร็จแล้ว)
