@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { C, FM, FT } from "@/lib/tokens";
 import { BackIcon, CheckIcon } from "./Icons";
 import { SectHead, BracketChain } from "./MicroGraphics";
 import type { ZipResult } from "@/lib/thai-zipcode";
+import { loadZipLookup, preloadZipLookup } from "@/lib/load-zipcode";
 import { normalizePhone, normalizePostal, isValidPhone, isFormValid, getHint } from "@/lib/validation";
 
 interface EditFormProps {
@@ -189,6 +190,12 @@ export function EditForm({
     !!(initialSubDistrict && initialDistrict && initialProvince)
   );
 
+  // Warm the postal-code lookup chunk on mount (retries internally on failure)
+  // so it's cached before the customer edits their postal code.
+  useEffect(() => {
+    preloadZipLookup();
+  }, []);
+
   const upd = useCallback((k: string, v: string) => {
     // phone: ตัวเลขล้วน, +66/66 -> 0, สูงสุด 10 หลัก
     if (k === "phone") v = normalizePhone(v);
@@ -201,36 +208,49 @@ export function EditForm({
     // Auto-fill logic for postal code
     if (k === "postalCode") {
       if (v.length === 5 && /^\d{5}$/.test(v)) {
-        import("@/lib/thai-zipcode").then(({ lookupZip }) => {
-          const results = lookupZip(v);
-          if (results.length === 1) {
-            setForm((p) => ({
-              ...p,
-              subDistrict: results[0].subDistrict,
-              district: results[0].district,
-              province: results[0].province,
-            }));
-            setAutoFilled(true);
-            setZipNotFound(false);
-            setShowDropdown(false);
-            setZipResults([]);
-            setPostalResolved(true);
-          } else if (results.length > 1) {
-            setZipResults(results);
-            setShowDropdown(true);
-            setAutoFilled(false);
-            setZipNotFound(false);
-            setPostalResolved(false); // รอผู้ใช้เลือกตำบล
-            setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
-          } else {
+        // Resilient dynamic import (retries on chunk/network failure) + lookup.
+        loadZipLookup()
+          .then((lookupZip) => {
+            const results = lookupZip(v);
+            if (results.length === 1) {
+              setForm((p) => ({
+                ...p,
+                subDistrict: results[0].subDistrict,
+                district: results[0].district,
+                province: results[0].province,
+              }));
+              setAutoFilled(true);
+              setZipNotFound(false);
+              setShowDropdown(false);
+              setZipResults([]);
+              setPostalResolved(true);
+            } else if (results.length > 1) {
+              setZipResults(results);
+              setShowDropdown(true);
+              setAutoFilled(false);
+              setZipNotFound(false);
+              setPostalResolved(false); // รอผู้ใช้เลือกตำบล
+              setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
+            } else {
+              setZipNotFound(true);
+              setAutoFilled(false);
+              setShowDropdown(false);
+              setZipResults([]);
+              setPostalResolved(false);
+              setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
+            }
+          })
+          .catch((err) => {
+            // GRACEFUL FALLBACK: lookup chunk failed even after retries. Never
+            // lock the customer out — open address fields for manual entry and
+            // accept the postal as resolved so the save isn't blocked.
+            console.error("[EditForm] zip lookup unavailable:", err);
             setZipNotFound(true);
             setAutoFilled(false);
             setShowDropdown(false);
             setZipResults([]);
-            setPostalResolved(false);
-            setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
-          }
-        });
+            setPostalResolved(true);
+          });
       } else {
         setShowDropdown(false);
         setZipResults([]);

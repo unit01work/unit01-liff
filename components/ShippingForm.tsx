@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { C, FM, FT, fmt } from "@/lib/tokens";
 import { BackIcon } from "./Icons";
 import { SectHead, BracketChain } from "./MicroGraphics";
 import type { CartItem } from "./Cart";
 import type { ZipResult } from "@/lib/thai-zipcode";
+import { loadZipLookup, preloadZipLookup } from "@/lib/load-zipcode";
 import { normalizePhone, normalizePostal, isValidPhone, isFormValid, getHint } from "@/lib/validation";
 
 export interface ShippingInfo {
@@ -178,6 +179,13 @@ export function ScreenShipping({
   const [postalResolved, setPostalResolved] = useState(!!(prefill && prefill.firstName));
   const sub = cart.reduce((s, c) => s + c.price * c.qty, 0);
 
+  // Warm the postal-code lookup chunk on mount so it's already cached by the
+  // time the customer types their postal code. Retries internally on failure;
+  // this is what stops the "must exit & re-enter the LIFF" symptom.
+  useEffect(() => {
+    preloadZipLookup();
+  }, []);
+
   const upd = useCallback((k: string, v: string) => {
     // phone: ตัวเลขล้วน, +66/66 -> 0, สูงสุด 10 หลัก (เก็บ 0 นำหน้า)
     if (k === "phone") v = normalizePhone(v);
@@ -190,41 +198,54 @@ export function ScreenShipping({
     // Auto-fill logic for postal code
     if (k === "postalCode") {
       if (v.length === 5 && /^\d{5}$/.test(v)) {
-        // Dynamic import + async lookup
-        import("@/lib/thai-zipcode").then(({ lookupZip }) => {
-          const results = lookupZip(v);
-          if (results.length === 1) {
-            // Single result — auto-fill immediately
-            setForm((p) => ({
-              ...p,
-              subDistrict: results[0].subDistrict,
-              district: results[0].district,
-              province: results[0].province,
-            }));
-            setAutoFilled(true);
-            setZipNotFound(false);
-            setShowDropdown(false);
-            setZipResults([]);
-            setPostalResolved(true);
-          } else if (results.length > 1) {
-            // Multiple results — show dropdown
-            setZipResults(results);
-            setShowDropdown(true);
-            setAutoFilled(false);
-            setZipNotFound(false);
-            setPostalResolved(false); // รอผู้ใช้เลือกตำบล
-            // Clear previous values
-            setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
-          } else {
-            // Not found — let user type manually
+        // Resilient dynamic import (retries on chunk/network failure) + lookup.
+        loadZipLookup()
+          .then((lookupZip) => {
+            const results = lookupZip(v);
+            if (results.length === 1) {
+              // Single result — auto-fill immediately
+              setForm((p) => ({
+                ...p,
+                subDistrict: results[0].subDistrict,
+                district: results[0].district,
+                province: results[0].province,
+              }));
+              setAutoFilled(true);
+              setZipNotFound(false);
+              setShowDropdown(false);
+              setZipResults([]);
+              setPostalResolved(true);
+            } else if (results.length > 1) {
+              // Multiple results — show dropdown
+              setZipResults(results);
+              setShowDropdown(true);
+              setAutoFilled(false);
+              setZipNotFound(false);
+              setPostalResolved(false); // รอผู้ใช้เลือกตำบล
+              // Clear previous values
+              setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
+            } else {
+              // Not found — let user type manually
+              setZipNotFound(true);
+              setAutoFilled(false);
+              setShowDropdown(false);
+              setZipResults([]);
+              setPostalResolved(false);
+              setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
+            }
+          })
+          .catch((err) => {
+            // GRACEFUL FALLBACK: the lookup chunk failed to load even after
+            // retries. Never lock the customer out — open the address fields
+            // for manual entry and accept the postal as resolved so submit
+            // isn't blocked. The customer fills ตำบล/อำเภอ/จังหวัด by hand.
+            console.error("[ShippingForm] zip lookup unavailable:", err);
             setZipNotFound(true);
             setAutoFilled(false);
             setShowDropdown(false);
             setZipResults([]);
-            setPostalResolved(false);
-            setForm((p) => ({ ...p, subDistrict: "", district: "", province: "" }));
-          }
-        });
+            setPostalResolved(true);
+          });
       } else {
         // Clear auto-fill state
         setShowDropdown(false);
