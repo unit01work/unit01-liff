@@ -8,11 +8,12 @@ import {
   logOrderStockMovement,
   refreshStockTab,
   parseSheetTimestamp,
+  ORDER_EXPIRE_MINUTES,
   type OrderRow,
 } from "@/lib/sheets";
 import { getLineClient } from "@/lib/line";
 
-const EXPIRE_MINUTES = 10;
+const EXPIRE_MINUTES = ORDER_EXPIRE_MINUTES;
 
 /**
  * Check and expire PENDING orders older than 10 minutes.

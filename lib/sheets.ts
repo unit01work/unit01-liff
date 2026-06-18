@@ -489,6 +489,13 @@ export async function updateOrderStatus(
 }
 
 /**
+ * Minutes a PENDING order is held (soft-reserve) before auto-cancel.
+ * Single source of truth — shared by the cron (/api/check-expired) and the
+ * webhook piggyback sweep so they can never drift apart again.
+ */
+export const ORDER_EXPIRE_MINUTES = 10;
+
+/**
  * Find PENDING orders that are older than `minutes` minutes.
  * Used by the auto-cancel cron job.
  */

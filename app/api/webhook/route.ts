@@ -15,6 +15,7 @@ import {
   findLatestOrderByUser,
   findActiveOrders,
   findExpiredOrders,
+  ORDER_EXPIRE_MINUTES,
   logOrderStockMovement,
   appendOrphanPayment,
 } from "@/lib/sheets";
@@ -894,7 +895,7 @@ export async function POST(request: NextRequest) {
     // the replyToken), so deferring it changes nothing the customer sees.
     after(async () => {
       try {
-        const expired = await findExpiredOrders(5);
+        const expired = await findExpiredOrders(ORDER_EXPIRE_MINUTES);
         // Expiring a PENDING order frees its reserved units, so the size may be
         // back in stock — purge the shop availability cache when any expire.
         if (expired.length > 0) revalidateTag(PRODUCTS_CACHE_TAG, { expire: 0 });
