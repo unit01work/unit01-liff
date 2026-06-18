@@ -225,8 +225,8 @@ export function buildContactFlex(
             paddingAll: "lg",
             action: { type: "postback", data: `action=chat_team&orderId=${cleanId}`, displayText: "Chat with team" },
             contents: [
-              { type: "text", text: "[ 4 ]", size: "xs", color: "#999999", weight: "bold", flex: 0 },
-              { type: "text", text: "Chat with team", size: "xs", color: "#999999", weight: "bold", margin: "lg", flex: 1 },
+              { type: "text", text: "[ 4 ]", size: "xs", color: "#1A1A1A", weight: "bold", flex: 0 },
+              { type: "text", text: "Chat with team", size: "xs", color: "#1A1A1A", weight: "bold", margin: "lg", flex: 1 },
               { type: "text", text: "›", size: "sm", color: "#C4BFBB", flex: 0, align: "end" },
             ],
           },
@@ -319,8 +319,8 @@ export function buildContactMenuNoOrder() {
             paddingAll: "lg",
             action: { type: "postback", data: "action=chat_team", displayText: "Chat with team" },
             contents: [
-              { type: "text", text: "[ 4 ]", size: "xs", color: "#999999", weight: "bold", flex: 0 },
-              { type: "text", text: "Chat with team", size: "xs", color: "#999999", weight: "bold", margin: "lg", flex: 1 },
+              { type: "text", text: "[ 4 ]", size: "xs", color: "#1A1A1A", weight: "bold", flex: 0 },
+              { type: "text", text: "Chat with team", size: "xs", color: "#1A1A1A", weight: "bold", margin: "lg", flex: 1 },
               { type: "text", text: "›", size: "sm", color: "#C4BFBB", flex: 0, align: "end" },
             ],
           },
