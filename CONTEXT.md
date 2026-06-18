@@ -117,7 +117,7 @@ Date, Type (RESERVED/SOLD/RETURNED/RESTOCK), Product, Size, Variant ID, Change, 
 - Edit ที่อยู่ได้ 1 ครั้ง / Change size ได้ 1 ครั้ง (แยกอิสระ) — ใช้แล้วล็อค (Address Changed / Size Changed = YES)
 - **Edit-Lock ตามเวลา (เสร็จแล้ว — ดูหัวข้อ "Edit-Lock" ด้านล่าง):** ลูกค้าแก้ที่อยู่/ไซส์ได้ถึง **10:00 น. (ICT)** ของวัน cutoff เท่านั้น (คิดจากเวลาที่จ่าย) เลยเวลานี้ = ล็อกทุกออเดอร์ที่ "กำลังเตรียมจัดส่ง". time-lock **มาก่อน** edit-once (เลยเวลา = แก้ไม่ได้ แม้ยังไม่เคยแก้)
 - ออเดอร์จัดส่งแล้ว แก้ไม่ได้ทุกอย่าง
-- Auto-cancel: PENDING เกิน 10 นาที → EXPIRED + คืนสต็อก (cron-job.org เรียก /api/check-expired ทุก 1 นาที)
+- Auto-cancel: PENDING เกิน 10 นาที → EXPIRED + คืนสต็อก (cron-job.org เรียก /api/check-expired ทุก 1 นาที). **ค่ากลางตัวเดียว `ORDER_EXPIRE_MINUTES = 10` ใน `lib/sheets.ts`** ใช้ทั้ง cron และ webhook piggyback sweep — ห้าม hardcode เลขซ้ำ (ดูหัวข้อ "Auto-cancel: ค่ากลาง" ด้านล่าง)
 - QR เป็น static — กันด้วยการ reject สลิปของออเดอร์ EXPIRED
 
 ---
@@ -218,6 +218,24 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 - **แก้บั๊กบอทแทรกแชทแมนนวล (commit `87d4863` → merge `2bf3cc3`):** แบนเนอร์ "กำลังแชทแบบแมนนวล" คือโหมดแชทเองของ **LINE OA Manager** (คนละระบบกับปุ่มปิด/เปิดบอทของเรา). ตอนนั้น LINE ส่ง event แบบ `mode: "standby"` มา webhook แต่โค้ดเดิมไม่เช็ค → บอทตอบเมนู fallback แทรกเข้ามากลางแชท. **แก้: ต้นลูป event เพิ่ม `if (event.mode && event.mode !== "active") continue;`** — traffic ปกติเป็น `active` เสมอ ไม่กระทบการขาย
 - **ย่อการ์ดแจ้งเตือนให้เล็ก/ไม่รก (commit `2bf3cc3`):** `buildAdminCard` เปลี่ยน bubble เป็น `size: "kilo"`, รูปโปรไฟล์จาก hero เต็มจอ → avatar เล็ก `xxs` ข้างชื่อ (แถว horizontal), ตัด hint ยาว + บรรทัด "เวลา:" ออก (เหลือ HH:MM สั้น), ปุ่ม `height: sm`. **หมายเหตุ: `cornerRadius` บน image โดน LINE validator ปฏิเสธ (error 400) — ถอดออก**
 - เทสต์: พรีวิวการ์ดยิงเข้า LINE เจ้าของ (uid=PREVIEW ปุ่มไม่มีผล) ผ่าน, `npx tsc --noEmit` + `npm run build` ผ่าน, deploy production live (verify `/api/webhook` ok + `/api/products` ปกติ)
+
+---
+
+## Welcome card ตอน follow (เพื่อนใหม่/ปลดบล็อก) (merge + ขึ้น production แล้ว 2026-06-19)
+การ์ดต้อนรับยิงอัตโนมัติเมื่อมีคนแอดเพื่อน LINE OA. **เพิ่มแบบ additive — ไม่แตะ flow ข้อความ/จ่ายเงิน/ออเดอร์เลย** (commit `0ebdafe` รูป + `a283547` handler)
+- **handler:** ใน `app/api/webhook/route.ts` เพิ่มสาขา `if (event.type === "follow")` (เดิม event ที่ไม่ใช่ message ถูก `continue` ข้าม) → ดึงชื่อจาก `getProfile(userId)` แล้ว `client.replyMessage(replyToken, ...)`. ใช้ **reply (ฟรี ไม่กินโควต้า push)** เพราะ follow event มี replyToken
+- **การ์ด:** `lib/welcome-card.ts` → `buildWelcomeCard(displayName)` คืน Flex bubble ขาว `kilo` 3 บล็อก (wordmark / tag+greeting+body / footer). ทุกอย่างเป็น **PNG โฮสต์** (`ASSET_BASE = https://unit01-liff.vercel.app/welcome/...` วางใน `public/welcome/`) เพราะ Flex ทำ custom font/letter-spacing ไม่ได้ — มีแค่ **"Hi {ชื่อ}"** ที่เป็น text จริง (ดึงชื่อ LINE มาแสดง, fallback "there")
+- **ดีไซน์:** ฟอนต์ MagdaCleanMono เรนเดอร์ headless ด้วย puppeteer-core + Chrome.app, export PNG โปร่ง @3x (รายละเอียด spec อยู่ใน `~/Desktop/handoff/README.md`)
+- เทสต์: ยิง test push เข้า LINE เจ้าของก่อน (ผ่าน "Hi N") → เจ้าของลองแอดเพื่อนจริง → ผ่าน. `npx tsc --noEmit` ผ่าน
+
+---
+
+## Auto-cancel: ค่ากลาง `ORDER_EXPIRE_MINUTES` (merge + ขึ้น production แล้ว 2026-06-19, commit `6858aa5`)
+แก้บั๊ก "ออเดอร์โดนยกเลิกเร็วเกินไป" — เวลานับถอยหลังจ่ายเงิน **ตั้งใจให้ 10 นาที** แต่โค้ดมี 2 จุดที่ตัดสินเวลานี้และค่าไม่ตรงกัน:
+- cron (`/api/check-expired`) ใช้ 10 ✅ · webhook piggyback sweep (`after()`) ใช้ `findExpiredOrders(5)` ❌ → บางใบโดนยกเลิกที่ 5 นาที
+- **แก้: ตั้งค่ากลางตัวเดียว `export const ORDER_EXPIRE_MINUTES = 10` ใน `lib/sheets.ts`** แล้วทั้ง 2 จุด import ไปใช้ — ห้าม hardcode เลขซ้ำอีก (drift ไม่เกิดได้แล้ว)
+- 3 ไฟล์ (`lib/sheets.ts`, `app/api/check-expired/route.ts`, `app/api/webhook/route.ts`) +11/-2 บรรทัด, ไม่แตะ logic อื่น, `npx tsc --noEmit` ผ่าน
+- **บทเรียน workflow:** ตอนแก้รอบนี้ working dir หลัก (`~/Desktop/unit01-liff`) ถูกอีก session เช็คเอาท์อยู่บน branch อื่นพร้อมงานค้าง — **ห้ามแก้/commit ใน working dir ที่ share กัน** ให้สร้าง worktree แยกจาก `origin/main` เสมอ. รอบนี้แก้บน worktree, rebase ขึ้นยอด main ล่าสุด (มี bot-handoff merge เข้ามาก่อน), resolve conflict โดยคงโครง `after()` ของเขาไว้แล้วใส่แค่การแก้ค่า → push fast-forward
 
 ---
 
