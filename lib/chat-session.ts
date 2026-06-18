@@ -296,22 +296,44 @@ function buildAdminCard(opts: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 }): any {
   const cfg = CARD_CONFIG[opts.variant];
-  const time = bkkNow().slice(0, 16); // "YYYY-MM-DD HH:MM"
+  const time = bkkNow().slice(11, 16); // "HH:MM" only — compact
+
+  // Header row: small avatar (if any) next to title + name. A tiny inline
+  // thumbnail instead of a full-width hero keeps the card short and tidy.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const headerInner: any[] = [
+    { type: "text", text: cfg.title, weight: "bold", size: "xs", color: cfg.accent, wrap: true },
+    { type: "text", text: opts.displayName, weight: "bold", size: "sm", color: "#1A1A1A", wrap: true },
+  ];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const headerRow: any[] = [];
+  if (opts.pictureUrl) {
+    headerRow.push({
+      type: "image",
+      url: opts.pictureUrl,
+      size: "xxs",
+      aspectRatio: "1:1",
+      aspectMode: "cover",
+      flex: 0,
+    });
+  }
+  headerRow.push({ type: "box", layout: "vertical", spacing: "none", contents: headerInner });
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bodyContents: any[] = [
-    { type: "text", text: cfg.title, weight: "bold", size: "lg", color: cfg.accent, wrap: true },
-    { type: "text", text: opts.displayName, weight: "bold", size: "md", color: "#1A1A1A", wrap: true },
+    { type: "box", layout: "horizontal", spacing: "sm", contents: headerRow },
   ];
   if (opts.lastMessage) {
-    bodyContents.push({ type: "text", text: `ข้อความ: ${opts.lastMessage}`, size: "sm", color: "#555555", wrap: true, margin: "sm" });
+    const msg = opts.lastMessage.length > 60 ? `${opts.lastMessage.slice(0, 60)}…` : opts.lastMessage;
+    bodyContents.push({ type: "text", text: `${msg}  ·  ${time}`, size: "xxs", color: "#999999", wrap: true, margin: "sm" });
+  } else {
+    bodyContents.push({ type: "text", text: time, size: "xxs", color: "#999999", margin: "sm" });
   }
-  bodyContents.push({ type: "text", text: `เวลา: ${time}`, size: "xs", color: "#999999" });
-  bodyContents.push({ type: "text", text: cfg.hint, size: "xs", color: "#999999", wrap: true, margin: "md" });
 
   const footerButtons = cfg.buttons.map((b) => ({
     type: "button",
     style: "primary",
-    height: "md",
+    height: "sm",
     color: b.color,
     action: {
       type: "postback",
@@ -324,19 +346,10 @@ function buildAdminCard(opts: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bubble: any = {
     type: "bubble",
-    body: { type: "box", layout: "vertical", spacing: "sm", contents: bodyContents },
-    footer: { type: "box", layout: "vertical", spacing: "sm", contents: footerButtons },
+    size: "kilo",
+    body: { type: "box", layout: "vertical", spacing: "sm", paddingAll: "md", contents: bodyContents },
+    footer: { type: "box", layout: "vertical", spacing: "xs", paddingAll: "md", contents: footerButtons },
   };
-  // Only attach the hero image when the customer actually has a profile picture.
-  if (opts.pictureUrl) {
-    bubble.hero = {
-      type: "image",
-      url: opts.pictureUrl,
-      size: "full",
-      aspectRatio: "20:13",
-      aspectMode: "cover",
-    };
-  }
   return { type: "flex", altText: cfg.title, contents: bubble };
 }
 

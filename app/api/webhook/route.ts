@@ -927,6 +927,12 @@ export async function POST(request: NextRequest) {
     const client = getLineClient();
 
     for (const event of events) {
+      // LINE OA native manual chat ("กำลังแชทแบบแมนนวล" in OA Manager) takes the
+      // conversation over and delivers its events in standby mode. The bot MUST
+      // stay completely silent then, or it intrudes on the live human chat
+      // (e.g. dropping the fallback menu mid-conversation). Normal traffic is
+      // always mode === "active", so this never affects regular sales.
+      if (event.mode && event.mode !== "active") continue;
       if (!event.replyToken) continue;
       const replyToken: string = event.replyToken;
       let messages;
