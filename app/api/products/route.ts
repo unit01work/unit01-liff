@@ -175,7 +175,7 @@ export async function GET() {
       // Only show products that have at least 1 variant with stock
       .filter((p) => p.variants.some((v) => v.stock > 0));
 
-    const shippingFee = parseInt(process.env.SHIPPING_FEE || "50", 10);
+    const shippingFee = parseInt(process.env.SHIPPING_FEE || "0", 10);
 
     // No CDN caching of the JSON itself: a CDN-cached response would keep
     // serving stale stock for its whole TTL even after revalidateTag (the CDN

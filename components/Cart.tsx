@@ -23,7 +23,7 @@ export interface CartItem {
 
 export function ScreenCart({
   cart,
-  shippingFee = 50,
+  shippingFee = 0,
   onUpdateQty,
   onRemove,
   onBack,
@@ -323,7 +323,7 @@ export function ScreenCart({
             }}
           >
             <span>SHIPPING</span>
-            <b style={{ color: C.negro, fontWeight: 500 }}>{fmt(ship)}</b>
+            <b style={{ color: C.negro, fontWeight: 500 }}>{ship > 0 ? fmt(ship) : "FREE"}</b>
           </div>
           <div
             style={{

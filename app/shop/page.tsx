@@ -119,7 +119,7 @@ function ReorderFlow({ orderId }: { orderId: string }) {
   const [orderNo, setOrderNo] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
-  const [shippingFee, setShippingFee] = useState(50);
+  const [shippingFee, setShippingFee] = useState(0);
   const [loading, setLoading] = useState(true);
   const [shippingPrefill, setShippingPrefill] = useState<ShippingInfo | null>(null);
 
@@ -301,7 +301,7 @@ function ShopFlow() {
   const [orderError, setOrderError] = useState<OrderErrorKind | null>(null);
   const lastFormRef = React.useRef<ShippingInfo | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
-  const [shippingFee, setShippingFee] = useState(50);
+  const [shippingFee, setShippingFee] = useState(0);
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [customerPrefill, setCustomerPrefill] = useState<ShippingInfo | null>(null);
 
