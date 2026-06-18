@@ -143,7 +143,7 @@ function DropdownItem({
 
 export function ScreenShipping({
   cart,
-  shippingFee = 50,
+  shippingFee = 0,
   prefill,
   onBack,
   onConfirm,

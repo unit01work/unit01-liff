@@ -54,7 +54,7 @@ export async function PUT(
       }
 
       const sub = cart.reduce((s: number, c: { price: number; qty: number }) => s + c.price * c.qty, 0);
-      const ship = parseInt(process.env.SHIPPING_FEE || "50", 10);
+      const ship = parseInt(process.env.SHIPPING_FEE || "0", 10);
       const total = sub + ship;
 
       const itemsStr = cart
