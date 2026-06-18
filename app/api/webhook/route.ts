@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import { revalidateTag } from "next/cache";
 import { validateSignature } from "@line/bot-sdk";
 import { getLineClient } from "@/lib/line";
@@ -46,10 +47,13 @@ import {
 } from "@/lib/edit-lock";
 import {
   enterChatSession,
-  getActiveChatSession,
+  getSessionStatus,
+  markSeen,
+  pauseBot,
   touchChatSession,
   endChatSession,
   notifyAdminNewChat,
+  notifyAdminNewCustomer,
 } from "@/lib/chat-session";
 
 const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}`;
@@ -874,27 +878,33 @@ export async function POST(request: NextRequest) {
     const body = JSON.parse(rawBody);
     const events = body.events || [];
 
-    // Piggyback: check and expire old PENDING orders on every webhook call
-    try {
-      const expired = await findExpiredOrders(5);
-      // Expiring a PENDING order frees its reserved units, so the size may be
-      // back in stock — purge the shop availability cache when any expire.
-      if (expired.length > 0) revalidateTag(PRODUCTS_CACHE_TAG, { expire: 0 });
-      for (const eo of expired) {
-        await updateOrderStatus(eo["Order ID"], "EXPIRED", "");
-        console.log(`[webhook] Auto-expired: ${eo["Order ID"]}`);
-        if (eo["LINE User ID"] && process.env.LINE_CHANNEL_ACCESS_TOKEN) {
-          const cl = getLineClient();
-          const did = eo["Order ID"].startsWith("#") ? eo["Order ID"] : `#${eo["Order ID"]}`;
-          await cl.pushMessage({
-            to: eo["LINE User ID"],
-            messages: [{ type: "text", text: `[ x ] ORDER CANCELLED\n${did}\n\nPayment timed out. Please place a new order.` }],
-          }).catch(() => {});
+    // Piggyback expiry sweep — moved OFF the webhook hot path via after() so it
+    // no longer delays the customer-facing reply. It runs after the response is
+    // flushed (this is also redundant with the /api/check-expired cron, so the
+    // worst case if it's skipped is the cron catches it). Uses pushMessage (not
+    // the replyToken), so deferring it changes nothing the customer sees.
+    after(async () => {
+      try {
+        const expired = await findExpiredOrders(5);
+        // Expiring a PENDING order frees its reserved units, so the size may be
+        // back in stock — purge the shop availability cache when any expire.
+        if (expired.length > 0) revalidateTag(PRODUCTS_CACHE_TAG, { expire: 0 });
+        for (const eo of expired) {
+          await updateOrderStatus(eo["Order ID"], "EXPIRED", "");
+          console.log(`[webhook] Auto-expired: ${eo["Order ID"]}`);
+          if (eo["LINE User ID"] && process.env.LINE_CHANNEL_ACCESS_TOKEN) {
+            const cl = getLineClient();
+            const did = eo["Order ID"].startsWith("#") ? eo["Order ID"] : `#${eo["Order ID"]}`;
+            await cl.pushMessage({
+              to: eo["LINE User ID"],
+              messages: [{ type: "text", text: `[ x ] ORDER CANCELLED\n${did}\n\nPayment timed out. Please place a new order.` }],
+            }).catch(() => {});
+          }
         }
+      } catch (expErr) {
+        console.error("[webhook] Expiry check failed:", expErr);
       }
-    } catch (expErr) {
-      console.error("[webhook] Expiry check failed:", expErr);
-    }
+    });
 
     // No token = can't reply
     if (
@@ -932,17 +942,37 @@ export async function POST(request: NextRequest) {
             // Enter human-handoff mode: bot goes silent on free text until the
             // owner ends it / customer breaks out / 60-min timeout.
             const chatUserId = event.source?.userId || "";
+            // Session state is written synchronously (the very next customer
+            // message relies on it to stay silent). The owner alert — which
+            // includes a slow LINE profile lookup — is deferred with after() so
+            // the customer's "you're chatting with our team" reply is INSTANT
+            // and no longer waits for the push (fixes the old sheet→notify lag).
             await enterChatSession(chatUserId);
-            // Push the admin card (name + photo + จบแชท button) — fire-and-forget.
-            await notifyAdminNewChat(chatUserId, "(เปิดแชทกับทีม)");
+            after(() => notifyAdminNewChat(chatUserId, "(เปิดแชทกับทีม)"));
             messages = chatEnterReply();
             break;
           }
           case "end_chat": {
-            // Owner tapped "จบแชท" on the admin card → resume bot for that user.
+            // Owner tapped "จบแชท" (red card) → resume bot for that user.
             const uid = params.get("uid") || "";
             await endChatSession(uid);
             messages = [{ type: "text" as const, text: "บอทกลับมาทำงานกับลูกค้าแล้ว" }];
+            break;
+          }
+          case "pause_bot": {
+            // Owner tapped "⏸️ ปิดบอท" on a customer's card → silence the bot for
+            // THAT customer so the owner can sell manually. Short text reply only;
+            // the owner returns to the SAME card and taps "▶️ ให้บอทกลับมา" when done.
+            const uid = params.get("uid") || "";
+            await pauseBot(uid);
+            messages = [{ type: "text" as const, text: "⏸️ ปิดบอทกับลูกค้าคนนี้แล้ว — คุยได้เลย\nเสร็จแล้วกด “▶️ ให้บอทกลับมา” ในการ์ดใบเดิมของลูกค้าคนนี้" }];
+            break;
+          }
+          case "resume_bot": {
+            // Owner tapped "▶️ ให้บอทกลับมา" on the same card → bot back to normal.
+            const uid = params.get("uid") || "";
+            await endChatSession(uid);
+            messages = [{ type: "text" as const, text: "▶️ บอทกลับมาทำงานกับลูกค้าคนนี้แล้ว" }];
             break;
           }
           case "exit_chat": {
@@ -1013,18 +1043,35 @@ export async function POST(request: NextRequest) {
       // ── Message events ──
       if (event.type !== "message") continue;
 
-      // ── Chat-with-team handoff gate ──
-      // If this user is in an active handoff session, the bot stays SILENT on
-      // free text only. Slips (images) and breakout keywords still work; the
-      // 60-min timeout is enforced lazily inside getActiveChatSession.
+      // ── Handoff / pause gate ── (ONE Sheets read decides everything)
+      // status meanings (lib/chat-session.ts):
+      //   "paused" → owner is selling manually: bot SILENT on everything except
+      //              slips (no keyword breakout — only the owner's resume button
+      //              brings the bot back).
+      //   "active" → chat-with-team handoff: bot SILENT on free text; breakout
+      //              keywords end it; slips still processed.
+      //   "seen"   → bot REPLIES normally (just a once-per-customer alert marker).
+      //   null     → brand-new interaction → alert the owner once (below).
+      // CRITICAL: images (payment slips) ALWAYS fall through to slip handling,
+      // regardless of state — the sales/payment path is never silenced.
       const sessionUserId = event.source?.userId || "";
-      const activeSession = await getActiveChatSession(sessionUserId);
-      if (activeSession) {
+      const sessionStatus = await getSessionStatus(sessionUserId);
+
+      if (sessionStatus === "paused") {
+        if (event.message.type !== "image") {
+          // Keep the row alive while the owner handles the customer; stay silent.
+          await touchChatSession(sessionUserId);
+          continue;
+        }
+        // image → fall through to slip handling.
+      } else if (sessionStatus === "active") {
         if (event.message.type === "text") {
           const t: string = event.message.text;
           if (matchKeyword(t, CHAT_BREAKOUT_KEYWORDS)) {
             // Customer typed a command keyword → leave handoff, handle normally.
+            // Leave a "seen" marker so this breakout doesn't re-alert the owner.
             await endChatSession(sessionUserId);
+            await markSeen(sessionUserId);
           } else {
             // Free text → keep session alive and stay silent (owner replies via OA).
             await touchChatSession(sessionUserId);
@@ -1036,6 +1083,16 @@ export async function POST(request: NextRequest) {
           // Sticker / other → keep session alive, stay silent.
           await touchChatSession(sessionUserId);
           continue;
+        }
+      } else if (sessionStatus === null && event.message.type !== "image") {
+        // Brand-new customer talking to the bot for the first time (text/sticker,
+        // not a slip). Alert the owner exactly ONCE so they can step in and close
+        // the sale. markSeen() is the dedup guard (writes the "seen" row); we only
+        // notify when it actually created the row. The push itself is deferred via
+        // after() so the customer's reply below is not delayed by it.
+        const firstMsg = event.message.type === "text" ? event.message.text : "(สติกเกอร์/อื่นๆ)";
+        if (await markSeen(sessionUserId)) {
+          after(() => notifyAdminNewCustomer(sessionUserId, firstMsg));
         }
       }
 

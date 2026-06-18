@@ -18,6 +18,18 @@ const TAB = "chat_sessions";
 const HEADERS = ["userId", "status", "enteredAt", "lastCustomerMsgAt"];
 const TIMEOUT_MS = 60 * 60 * 1000; // 60 minutes
 
+// status column values (one row per customer):
+//   "active" — chat-with-team handoff (bot SILENT on free text; legacy value)
+//   "paused" — owner tapped "ปิดบอท & รับช่วงเอง" (bot SILENT, owner sells manually)
+//   "seen"   — owner already alerted about this customer's first bot interaction
+//              (bot still REPLIES normally — this is only a once-per-customer
+//              dedup marker so the owner isn't notified on every message)
+// Rows in any state expire lazily after TIMEOUT_MS of customer silence, so a
+// customer returning later re-alerts the owner (a fresh sales opportunity).
+const CHAT = "active";
+const PAUSED = "paused";
+const SEEN = "seen";
+
 const OWNER_FALLBACK = "U7f329a9ce9a351a1bebc77646e20b2e1";
 function adminUserId(): string {
   return process.env.ADMIN_LINE_USER_ID || process.env.OWNER_LINE_USER_ID || OWNER_FALLBACK;
@@ -91,12 +103,12 @@ export async function enterChatSession(userId: string): Promise<void> {
   const now = bkkNow();
   const existing = rows.find((r) => r.get("userId") === userId);
   if (existing) {
-    existing.set("status", "active");
+    existing.set("status", CHAT);
     existing.set("enteredAt", now);
     existing.set("lastCustomerMsgAt", now);
     await existing.save();
   } else {
-    await sheet.addRow({ userId, status: "active", enteredAt: now, lastCustomerMsgAt: now });
+    await sheet.addRow({ userId, status: CHAT, enteredAt: now, lastCustomerMsgAt: now });
   }
 }
 
@@ -111,7 +123,7 @@ export async function getActiveChatSession(userId: string): Promise<ChatSession 
   const rows = await sheet.getRows();
   const row = rows.find((r) => r.get("userId") === userId);
   if (!row) return null;
-  if ((row.get("status") || "") !== "active") return null;
+  if ((row.get("status") || "") !== CHAT) return null;
   const last = parseBkk(row.get("lastCustomerMsgAt") || "");
   if (last && Date.now() - last > TIMEOUT_MS) {
     await row.delete();
@@ -137,7 +149,7 @@ export async function touchChatSession(userId: string): Promise<void> {
   }
 }
 
-/** End a session (owner tapped จบแชท / keyword breakout / timeout). */
+/** End a session (owner tapped จบแชท / keyword breakout / timeout / resume). */
 export async function endChatSession(userId: string): Promise<boolean> {
   if (!userId) return false;
   const sheet = await getTab();
@@ -148,6 +160,62 @@ export async function endChatSession(userId: string): Promise<boolean> {
     return true;
   }
   return false;
+}
+
+/**
+ * Single-read status lookup used by the webhook gate. Returns the row's status
+ * ("active" | "paused" | "seen") or null. Lazily enforces the 60-min timeout
+ * for ALL states (deletes the stale row → bot resumes / re-alert next time).
+ * Replaces getActiveChatSession on the hot path so one read decides everything.
+ */
+export async function getSessionStatus(userId: string): Promise<string | null> {
+  if (!userId) return null;
+  const sheet = await getTab();
+  const rows = await sheet.getRows();
+  const row = rows.find((r) => r.get("userId") === userId);
+  if (!row) return null;
+  const status = (row.get("status") || "").trim();
+  if (!status) return null;
+  const last = parseBkk(row.get("lastCustomerMsgAt") || "");
+  if (last && Date.now() - last > TIMEOUT_MS) {
+    await row.delete();
+    return null;
+  }
+  return status;
+}
+
+/**
+ * Mark this customer as "seen" (owner alerted about their first bot interaction).
+ * Returns true ONLY when a NEW row was created — i.e. this is the first time, so
+ * the caller should notify the owner exactly once. If any row already exists
+ * (seen / paused / active), returns false (already alerted — stay quiet).
+ * Re-checks rows itself so it stays correct even if called without a prior read.
+ */
+export async function markSeen(userId: string): Promise<boolean> {
+  if (!userId) return false;
+  const sheet = await getTab();
+  const rows = await sheet.getRows();
+  const existing = rows.find((r) => r.get("userId") === userId);
+  if (existing) return false;
+  const now = bkkNow();
+  await sheet.addRow({ userId, status: SEEN, enteredAt: now, lastCustomerMsgAt: now });
+  return true;
+}
+
+/** Owner tapped "ปิดบอท & รับช่วงเอง" → pause the bot for this customer. */
+export async function pauseBot(userId: string): Promise<void> {
+  if (!userId) return;
+  const sheet = await getTab();
+  const rows = await sheet.getRows();
+  const now = bkkNow();
+  const existing = rows.find((r) => r.get("userId") === userId);
+  if (existing) {
+    existing.set("status", PAUSED);
+    existing.set("lastCustomerMsgAt", now);
+    await existing.save();
+  } else {
+    await sheet.addRow({ userId, status: PAUSED, enteredAt: now, lastCustomerMsgAt: now });
+  }
 }
 
 /* ── LINE profile + admin notification (own raw fetch, never throws) ── */
@@ -169,54 +237,95 @@ async function fetchLineProfile(
   }
 }
 
-// Build the Thai admin alert card: customer name + photo + last message + a
-// single red "จบแชท" button. The button carries the customer's uid so it ends
-// only that conversation (supports several concurrent handoffs). No "open chat"
-// button — chat.line.biz cannot be deep-linked from the webhook userId
-// (verified: 404). The name + photo are enough to locate the chat in OA Manager.
+// Two visually-distinct admin alert cards (so the owner can tell at a glance,
+// even when several customers are messaging at once). Each card shows the
+// customer's NAME + PHOTO so it's obvious WHO it belongs to, and every footer
+// button carries that customer's uid so it only affects that one conversation.
+// No "open chat" deep-link — chat.line.biz can't be linked from a webhook userId
+// (verified 404); the name + photo locate the chat in OA Manager.
+//
+// IMPORTANT — why each card carries BOTH a pause AND a resume button:
+// A LINE Flex message CANNOT be edited after it is sent, so we can't flip a
+// single button between "pause" and "resume". Instead every card is a permanent
+// per-customer control panel: the owner taps "ปิดบอท" to step in, then later
+// SCROLLS BACK to that same customer's card and taps "ให้บอทกลับมา" when done —
+// no need to hunt for a different message. Both actions are idempotent.
+//
+//   "takeover" → AMBER. A customer started talking to the bot. Pause + Resume.
+//   "chat"     → RED.   Customer tapped "Chat with team". Resume (จบแชท) only —
+//                       the bot is already silent, so it just needs turning back on.
+type AdminCardVariant = "takeover" | "chat";
+
+interface CardButton {
+  label: string;
+  color: string;
+  action: string; // postback "action" value
+  displayText: string;
+}
+
+const CARD_CONFIG: Record<
+  AdminCardVariant,
+  { title: string; accent: string; hint: string; buttons: CardButton[] }
+> = {
+  takeover: {
+    title: "🟠 ลูกค้าเริ่มทักบอท",
+    accent: "#C47237",
+    hint: "กด “ปิดบอท” เพื่อเข้าไปขายเอง คุยเสร็จแล้วเลื่อนกลับมาการ์ดใบนี้ของลูกค้าคนเดิม แล้วกด “ให้บอทกลับมา”",
+    buttons: [
+      { label: "⏸️ ปิดบอท & รับช่วงเอง", color: "#C47237", action: "pause_bot", displayText: "ปิดบอท รับช่วงเอง" },
+      { label: "▶️ ให้บอทกลับมา", color: "#1A1A1A", action: "resume_bot", displayText: "ให้บอทกลับมาทำงาน" },
+    ],
+  },
+  chat: {
+    title: "🔴 ลูกค้าขอคุยกับทีม",
+    accent: "#C44A3A",
+    hint: "ตอบลูกค้าผ่าน LINE OA Manager แล้วเลื่อนกลับมาการ์ดใบนี้ กดปุ่มด้านล่างเมื่อคุยจบ",
+    buttons: [
+      { label: "▶️ จบแชท · ให้บอทกลับมา", color: "#C44A3A", action: "end_chat", displayText: "จบแชทกับลูกค้าแล้ว" },
+    ],
+  },
+};
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function buildAdminChatCard(opts: {
+function buildAdminCard(opts: {
+  variant: AdminCardVariant;
   displayName: string;
   pictureUrl: string;
-  lastMessage: string;
+  lastMessage?: string;
   userId: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 }): any {
+  const cfg = CARD_CONFIG[opts.variant];
   const time = bkkNow().slice(0, 16); // "YYYY-MM-DD HH:MM"
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bodyContents: any[] = [
+    { type: "text", text: cfg.title, weight: "bold", size: "lg", color: cfg.accent, wrap: true },
+    { type: "text", text: opts.displayName, weight: "bold", size: "md", color: "#1A1A1A", wrap: true },
+  ];
+  if (opts.lastMessage) {
+    bodyContents.push({ type: "text", text: `ข้อความ: ${opts.lastMessage}`, size: "sm", color: "#555555", wrap: true, margin: "sm" });
+  }
+  bodyContents.push({ type: "text", text: `เวลา: ${time}`, size: "xs", color: "#999999" });
+  bodyContents.push({ type: "text", text: cfg.hint, size: "xs", color: "#999999", wrap: true, margin: "md" });
+
+  const footerButtons = cfg.buttons.map((b) => ({
+    type: "button",
+    style: "primary",
+    height: "md",
+    color: b.color,
+    action: {
+      type: "postback",
+      label: b.label,
+      data: `action=${b.action}&uid=${opts.userId}`,
+      displayText: b.displayText,
+    },
+  }));
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bubble: any = {
     type: "bubble",
-    body: {
-      type: "box",
-      layout: "vertical",
-      spacing: "sm",
-      contents: [
-        { type: "text", text: "ลูกค้าขอคุยกับทีม", weight: "bold", size: "lg" },
-        { type: "text", text: opts.displayName, weight: "bold", size: "md", color: "#C47237", wrap: true },
-        { type: "text", text: `ข้อความ: ${opts.lastMessage || "-"}`, size: "sm", color: "#555555", wrap: true, margin: "sm" },
-        { type: "text", text: `เวลา: ${time}`, size: "xs", color: "#999999" },
-        { type: "text", text: "ตอบลูกค้าผ่าน LINE OA Manager แล้วกดปุ่มด้านล่างเมื่อคุยจบ", size: "xs", color: "#999999", wrap: true, margin: "md" },
-      ],
-    },
-    footer: {
-      type: "box",
-      layout: "vertical",
-      spacing: "sm",
-      contents: [
-        {
-          type: "button",
-          style: "primary",
-          height: "md",
-          color: "#C44A3A",
-          action: {
-            type: "postback",
-            label: "จบแชท · ให้บอทกลับมา",
-            data: `action=end_chat&uid=${opts.userId}`,
-            displayText: "จบแชทกับลูกค้าแล้ว",
-          },
-        },
-      ],
-    },
+    body: { type: "box", layout: "vertical", spacing: "sm", contents: bodyContents },
+    footer: { type: "box", layout: "vertical", spacing: "sm", contents: footerButtons },
   };
   // Only attach the hero image when the customer actually has a profile picture.
   if (opts.pictureUrl) {
@@ -228,23 +337,26 @@ function buildAdminChatCard(opts: {
       aspectMode: "cover",
     };
   }
-  return { type: "flex", altText: "ลูกค้าขอคุยกับทีม", contents: bubble };
+  return { type: "flex", altText: cfg.title, contents: bubble };
 }
 
-/**
- * Push the admin a handoff card (name + photo + last message + จบแชท button).
- * Fire-and-forget: never throws so it can't break the customer-facing reply.
- */
-export async function notifyAdminNewChat(userId: string, lastMessage: string): Promise<void> {
+/* Low-level push: send any admin card. Never throws (handoff must not break the
+ * customer-facing reply). */
+async function pushAdminCard(
+  variant: AdminCardVariant,
+  userId: string,
+  lastMessage?: string
+): Promise<void> {
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   const to = adminUserId();
   if (!token || !to) {
-    console.error("[chat-session] notifyAdminNewChat — missing LINE token / admin id");
+    console.error("[chat-session] pushAdminCard — missing LINE token / admin id");
     return;
   }
   try {
     const profile = await fetchLineProfile(userId);
-    const card = buildAdminChatCard({
+    const card = buildAdminCard({
+      variant,
       displayName: profile.displayName,
       pictureUrl: profile.pictureUrl,
       lastMessage,
@@ -259,6 +371,24 @@ export async function notifyAdminNewChat(userId: string, lastMessage: string): P
       console.error("[chat-session] admin push failed:", res.status, await res.text());
     }
   } catch (e) {
-    console.error("[chat-session] notifyAdminNewChat error:", e);
+    console.error("[chat-session] pushAdminCard error:", e);
   }
 }
+
+/**
+ * RED card — customer tapped "Chat with team". Button ends the chat.
+ * Fire-and-forget: never throws so it can't break the customer-facing reply.
+ */
+export async function notifyAdminNewChat(userId: string, lastMessage: string): Promise<void> {
+  await pushAdminCard("chat", userId, lastMessage);
+}
+
+/**
+ * AMBER card — a customer's FIRST interaction with the bot. Button pauses the
+ * bot so the owner can step in and close the sale. Caller must gate this with
+ * markSeen() so it fires at most once per customer.
+ */
+export async function notifyAdminNewCustomer(userId: string, lastMessage: string): Promise<void> {
+  await pushAdminCard("takeover", userId, lastMessage);
+}
+
