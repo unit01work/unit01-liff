@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import { revalidateTag } from "next/cache";
 import { validateSignature } from "@line/bot-sdk";
 import { getLineClient } from "@/lib/line";
@@ -46,10 +47,13 @@ import {
 } from "@/lib/edit-lock";
 import {
   enterChatSession,
-  getActiveChatSession,
+  getSessionStatus,
+  markSeen,
+  pauseBot,
   touchChatSession,
   endChatSession,
   notifyAdminNewChat,
+  notifyAdminNewCustomer,
 } from "@/lib/chat-session";
 
 const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}`;
@@ -329,10 +333,17 @@ function replyDuplicateSlip() {
 /* ── Handle image (slip) message ── */
 // Returns LINE messages (text and/or Flex) — widened to any[] because the
 // confirm / invalid-slip replies are now Flex while the others stay text.
+// `silentOnInvalid`: when the owner has paused the bot / is in a live chat, a
+// non-slip photo (or an unreadable one) should NOT trigger the "couldn't read
+// your slip" reply that would interrupt the human conversation. A REAL slip is
+// still verified and processed exactly the same — only the "invalid" / error
+// outcomes return [] (no reply) instead. Payment confirmation, duplicate, and
+// no-matching-order replies still go out, because those are real payment events.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleSlipImage(
   messageId: string,
-  userId: string
+  userId: string,
+  silentOnInvalid = false
 ): Promise<any[]> {
   try {
     // 1. Download image from LINE
@@ -347,8 +358,8 @@ async function handleSlipImage(
 
     // 3. Check if slip is valid
     if (!slipResult.success || !slipResult.data?.success) {
-      console.log("[slip] Invalid slip");
-      return replyInvalidSlip();
+      console.log("[slip] Invalid slip", silentOnInvalid ? "(silent — handoff active)" : "");
+      return silentOnInvalid ? [] : replyInvalidSlip();
     }
 
     const amount = slipResult.data.amount;
@@ -431,7 +442,9 @@ async function handleSlipImage(
     return replyConfirmPayment(orderId, amount, order["Paid At"] || nowBKK());
   } catch (err) {
     console.error("[slip] Error processing slip:", err);
-    return replyInvalidSlip();
+    // During a handoff, stay silent rather than interrupt the human chat with a
+    // "couldn't read your slip" message (the owner is watching and can step in).
+    return silentOnInvalid ? [] : replyInvalidSlip();
   }
 }
 
@@ -874,27 +887,33 @@ export async function POST(request: NextRequest) {
     const body = JSON.parse(rawBody);
     const events = body.events || [];
 
-    // Piggyback: check and expire old PENDING orders on every webhook call
-    try {
-      const expired = await findExpiredOrders(5);
-      // Expiring a PENDING order frees its reserved units, so the size may be
-      // back in stock — purge the shop availability cache when any expire.
-      if (expired.length > 0) revalidateTag(PRODUCTS_CACHE_TAG, { expire: 0 });
-      for (const eo of expired) {
-        await updateOrderStatus(eo["Order ID"], "EXPIRED", "");
-        console.log(`[webhook] Auto-expired: ${eo["Order ID"]}`);
-        if (eo["LINE User ID"] && process.env.LINE_CHANNEL_ACCESS_TOKEN) {
-          const cl = getLineClient();
-          const did = eo["Order ID"].startsWith("#") ? eo["Order ID"] : `#${eo["Order ID"]}`;
-          await cl.pushMessage({
-            to: eo["LINE User ID"],
-            messages: [{ type: "text", text: `[ x ] ORDER CANCELLED\n${did}\n\nPayment timed out. Please place a new order.` }],
-          }).catch(() => {});
+    // Piggyback expiry sweep — moved OFF the webhook hot path via after() so it
+    // no longer delays the customer-facing reply. It runs after the response is
+    // flushed (this is also redundant with the /api/check-expired cron, so the
+    // worst case if it's skipped is the cron catches it). Uses pushMessage (not
+    // the replyToken), so deferring it changes nothing the customer sees.
+    after(async () => {
+      try {
+        const expired = await findExpiredOrders(5);
+        // Expiring a PENDING order frees its reserved units, so the size may be
+        // back in stock — purge the shop availability cache when any expire.
+        if (expired.length > 0) revalidateTag(PRODUCTS_CACHE_TAG, { expire: 0 });
+        for (const eo of expired) {
+          await updateOrderStatus(eo["Order ID"], "EXPIRED", "");
+          console.log(`[webhook] Auto-expired: ${eo["Order ID"]}`);
+          if (eo["LINE User ID"] && process.env.LINE_CHANNEL_ACCESS_TOKEN) {
+            const cl = getLineClient();
+            const did = eo["Order ID"].startsWith("#") ? eo["Order ID"] : `#${eo["Order ID"]}`;
+            await cl.pushMessage({
+              to: eo["LINE User ID"],
+              messages: [{ type: "text", text: `[ x ] ORDER CANCELLED\n${did}\n\nPayment timed out. Please place a new order.` }],
+            }).catch(() => {});
+          }
         }
+      } catch (expErr) {
+        console.error("[webhook] Expiry check failed:", expErr);
       }
-    } catch (expErr) {
-      console.error("[webhook] Expiry check failed:", expErr);
-    }
+    });
 
     // No token = can't reply
     if (
@@ -932,17 +951,37 @@ export async function POST(request: NextRequest) {
             // Enter human-handoff mode: bot goes silent on free text until the
             // owner ends it / customer breaks out / 60-min timeout.
             const chatUserId = event.source?.userId || "";
+            // Session state is written synchronously (the very next customer
+            // message relies on it to stay silent). The owner alert — which
+            // includes a slow LINE profile lookup — is deferred with after() so
+            // the customer's "you're chatting with our team" reply is INSTANT
+            // and no longer waits for the push (fixes the old sheet→notify lag).
             await enterChatSession(chatUserId);
-            // Push the admin card (name + photo + จบแชท button) — fire-and-forget.
-            await notifyAdminNewChat(chatUserId, "(เปิดแชทกับทีม)");
+            after(() => notifyAdminNewChat(chatUserId, "(เปิดแชทกับทีม)"));
             messages = chatEnterReply();
             break;
           }
           case "end_chat": {
-            // Owner tapped "จบแชท" on the admin card → resume bot for that user.
+            // Owner tapped "จบแชท" (red card) → resume bot for that user.
             const uid = params.get("uid") || "";
             await endChatSession(uid);
             messages = [{ type: "text" as const, text: "บอทกลับมาทำงานกับลูกค้าแล้ว" }];
+            break;
+          }
+          case "pause_bot": {
+            // Owner tapped "⏸️ ปิดบอท" on a customer's card → silence the bot for
+            // THAT customer so the owner can sell manually. Short text reply only;
+            // the owner returns to the SAME card and taps "▶️ ให้บอทกลับมา" when done.
+            const uid = params.get("uid") || "";
+            await pauseBot(uid);
+            messages = [{ type: "text" as const, text: "⏸️ ปิดบอทกับลูกค้าคนนี้แล้ว — คุยได้เลย\nเสร็จแล้วกด “▶️ ให้บอทกลับมา” ในการ์ดใบเดิมของลูกค้าคนนี้" }];
+            break;
+          }
+          case "resume_bot": {
+            // Owner tapped "▶️ ให้บอทกลับมา" on the same card → bot back to normal.
+            const uid = params.get("uid") || "";
+            await endChatSession(uid);
+            messages = [{ type: "text" as const, text: "▶️ บอทกลับมาทำงานกับลูกค้าคนนี้แล้ว" }];
             break;
           }
           case "exit_chat": {
@@ -1013,29 +1052,72 @@ export async function POST(request: NextRequest) {
       // ── Message events ──
       if (event.type !== "message") continue;
 
-      // ── Chat-with-team handoff gate ──
-      // If this user is in an active handoff session, the bot stays SILENT on
-      // free text only. Slips (images) and breakout keywords still work; the
-      // 60-min timeout is enforced lazily inside getActiveChatSession.
+      // ── Handoff / pause gate ── (ONE Sheets read decides everything)
+      // status meanings (lib/chat-session.ts):
+      //   "paused" → owner is selling manually: bot SILENT on everything except
+      //              slips (no keyword breakout — only the owner's resume button
+      //              brings the bot back).
+      //   "active" → chat-with-team handoff: bot SILENT on free text; breakout
+      //              keywords end it; slips still processed.
+      //   "seen"   → bot REPLIES normally (just a once-per-customer alert marker).
+      //   null     → brand-new interaction → alert the owner once (below).
+      // CRITICAL: images (payment slips) ALWAYS fall through to slip handling,
+      // regardless of state — the sales/payment path is never silenced.
       const sessionUserId = event.source?.userId || "";
-      const activeSession = await getActiveChatSession(sessionUserId);
-      if (activeSession) {
+      // FAIL-OPEN: if the chat_sessions read throws (Sheets hiccup), behave as if
+      // there's NO session so the bot still replies normally and slips still go
+      // through. A handoff/notification feature must NEVER block the sales path.
+      let sessionStatus: string | null = null;
+      let sessionReadOk = true;
+      try {
+        sessionStatus = await getSessionStatus(sessionUserId);
+      } catch (sErr) {
+        sessionReadOk = false;
+        console.error("[webhook] getSessionStatus failed — fail-open:", sErr);
+      }
+
+      if (sessionStatus === "paused") {
+        if (event.message.type !== "image") {
+          // Keep the row alive while the owner handles the customer; stay silent.
+          await touchChatSession(sessionUserId).catch(() => {});
+          continue;
+        }
+        // image → fall through to slip handling.
+      } else if (sessionStatus === "active") {
         if (event.message.type === "text") {
           const t: string = event.message.text;
           if (matchKeyword(t, CHAT_BREAKOUT_KEYWORDS)) {
             // Customer typed a command keyword → leave handoff, handle normally.
-            await endChatSession(sessionUserId);
+            // Leave a "seen" marker so this breakout doesn't re-alert the owner.
+            // Best-effort: never let a Sheets error block the reply below.
+            await endChatSession(sessionUserId).catch(() => {});
+            await markSeen(sessionUserId).catch(() => {});
           } else {
             // Free text → keep session alive and stay silent (owner replies via OA).
-            await touchChatSession(sessionUserId);
+            await touchChatSession(sessionUserId).catch(() => {});
             continue;
           }
         } else if (event.message.type === "image") {
           // Slip / photo → never silence; fall through to normal slip handling.
         } else {
           // Sticker / other → keep session alive, stay silent.
-          await touchChatSession(sessionUserId);
+          await touchChatSession(sessionUserId).catch(() => {});
           continue;
+        }
+      } else if (sessionReadOk && sessionStatus === null && event.message.type !== "image") {
+        // Brand-new customer talking to the bot for the first time (text/sticker,
+        // not a slip). Alert the owner exactly ONCE so they can step in and close
+        // the sale. markSeen() is the dedup guard (writes the "seen" row); we only
+        // notify when it actually created the row. The push itself is deferred via
+        // after() so the customer's reply below is not delayed by it. Wrapped in
+        // try/catch so a Sheets error only skips the alert — never the reply.
+        const firstMsg = event.message.type === "text" ? event.message.text : "(สติกเกอร์/อื่นๆ)";
+        try {
+          if (await markSeen(sessionUserId)) {
+            after(() => notifyAdminNewCustomer(sessionUserId, firstMsg));
+          }
+        } catch (mErr) {
+          console.error("[webhook] markSeen failed — skip alert, still reply:", mErr);
         }
       }
 
@@ -1050,13 +1132,24 @@ export async function POST(request: NextRequest) {
           messages = fallbackReply();
         }
       } else if (event.message.type === "image") {
-        // Customer sent an image — verify as payment slip
+        // Customer sent an image — verify as payment slip. During a handoff
+        // (paused / live chat) a REAL slip is still verified & processed the
+        // same, but a non-slip / unreadable image stays SILENT instead of
+        // replying "couldn't read your slip" over the human conversation.
         const userId = event.source?.userId || "";
         const messageId = event.message.id;
-        messages = await handleSlipImage(messageId, userId);
+        const inHandoff = sessionStatus === "paused" || sessionStatus === "active";
+        messages = await handleSlipImage(messageId, userId, inHandoff);
       } else {
         // Sticker, video, audio, etc.
         messages = fallbackReply();
+      }
+
+      // A silent slip outcome during a handoff returns [] — skip the reply
+      // entirely (LINE rejects an empty messages array).
+      if (!messages || messages.length === 0) {
+        console.log("[webhook] No reply (silent handoff outcome)");
+        continue;
       }
 
       try {
