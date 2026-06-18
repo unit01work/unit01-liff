@@ -333,10 +333,17 @@ function replyDuplicateSlip() {
 /* ── Handle image (slip) message ── */
 // Returns LINE messages (text and/or Flex) — widened to any[] because the
 // confirm / invalid-slip replies are now Flex while the others stay text.
+// `silentOnInvalid`: when the owner has paused the bot / is in a live chat, a
+// non-slip photo (or an unreadable one) should NOT trigger the "couldn't read
+// your slip" reply that would interrupt the human conversation. A REAL slip is
+// still verified and processed exactly the same — only the "invalid" / error
+// outcomes return [] (no reply) instead. Payment confirmation, duplicate, and
+// no-matching-order replies still go out, because those are real payment events.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleSlipImage(
   messageId: string,
-  userId: string
+  userId: string,
+  silentOnInvalid = false
 ): Promise<any[]> {
   try {
     // 1. Download image from LINE
@@ -351,8 +358,8 @@ async function handleSlipImage(
 
     // 3. Check if slip is valid
     if (!slipResult.success || !slipResult.data?.success) {
-      console.log("[slip] Invalid slip");
-      return replyInvalidSlip();
+      console.log("[slip] Invalid slip", silentOnInvalid ? "(silent — handoff active)" : "");
+      return silentOnInvalid ? [] : replyInvalidSlip();
     }
 
     const amount = slipResult.data.amount;
@@ -435,7 +442,9 @@ async function handleSlipImage(
     return replyConfirmPayment(orderId, amount, order["Paid At"] || nowBKK());
   } catch (err) {
     console.error("[slip] Error processing slip:", err);
-    return replyInvalidSlip();
+    // During a handoff, stay silent rather than interrupt the human chat with a
+    // "couldn't read your slip" message (the owner is watching and can step in).
+    return silentOnInvalid ? [] : replyInvalidSlip();
   }
 }
 
@@ -1123,13 +1132,24 @@ export async function POST(request: NextRequest) {
           messages = fallbackReply();
         }
       } else if (event.message.type === "image") {
-        // Customer sent an image — verify as payment slip
+        // Customer sent an image — verify as payment slip. During a handoff
+        // (paused / live chat) a REAL slip is still verified & processed the
+        // same, but a non-slip / unreadable image stays SILENT instead of
+        // replying "couldn't read your slip" over the human conversation.
         const userId = event.source?.userId || "";
         const messageId = event.message.id;
-        messages = await handleSlipImage(messageId, userId);
+        const inHandoff = sessionStatus === "paused" || sessionStatus === "active";
+        messages = await handleSlipImage(messageId, userId, inHandoff);
       } else {
         // Sticker, video, audio, etc.
         messages = fallbackReply();
+      }
+
+      // A silent slip outcome during a handoff returns [] — skip the reply
+      // entirely (LINE rejects an empty messages array).
+      if (!messages || messages.length === 0) {
+        console.log("[webhook] No reply (silent handoff outcome)");
+        continue;
       }
 
       try {
