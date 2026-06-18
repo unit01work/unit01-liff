@@ -1055,12 +1055,22 @@ export async function POST(request: NextRequest) {
       // CRITICAL: images (payment slips) ALWAYS fall through to slip handling,
       // regardless of state — the sales/payment path is never silenced.
       const sessionUserId = event.source?.userId || "";
-      const sessionStatus = await getSessionStatus(sessionUserId);
+      // FAIL-OPEN: if the chat_sessions read throws (Sheets hiccup), behave as if
+      // there's NO session so the bot still replies normally and slips still go
+      // through. A handoff/notification feature must NEVER block the sales path.
+      let sessionStatus: string | null = null;
+      let sessionReadOk = true;
+      try {
+        sessionStatus = await getSessionStatus(sessionUserId);
+      } catch (sErr) {
+        sessionReadOk = false;
+        console.error("[webhook] getSessionStatus failed — fail-open:", sErr);
+      }
 
       if (sessionStatus === "paused") {
         if (event.message.type !== "image") {
           // Keep the row alive while the owner handles the customer; stay silent.
-          await touchChatSession(sessionUserId);
+          await touchChatSession(sessionUserId).catch(() => {});
           continue;
         }
         // image → fall through to slip handling.
@@ -1070,29 +1080,35 @@ export async function POST(request: NextRequest) {
           if (matchKeyword(t, CHAT_BREAKOUT_KEYWORDS)) {
             // Customer typed a command keyword → leave handoff, handle normally.
             // Leave a "seen" marker so this breakout doesn't re-alert the owner.
-            await endChatSession(sessionUserId);
-            await markSeen(sessionUserId);
+            // Best-effort: never let a Sheets error block the reply below.
+            await endChatSession(sessionUserId).catch(() => {});
+            await markSeen(sessionUserId).catch(() => {});
           } else {
             // Free text → keep session alive and stay silent (owner replies via OA).
-            await touchChatSession(sessionUserId);
+            await touchChatSession(sessionUserId).catch(() => {});
             continue;
           }
         } else if (event.message.type === "image") {
           // Slip / photo → never silence; fall through to normal slip handling.
         } else {
           // Sticker / other → keep session alive, stay silent.
-          await touchChatSession(sessionUserId);
+          await touchChatSession(sessionUserId).catch(() => {});
           continue;
         }
-      } else if (sessionStatus === null && event.message.type !== "image") {
+      } else if (sessionReadOk && sessionStatus === null && event.message.type !== "image") {
         // Brand-new customer talking to the bot for the first time (text/sticker,
         // not a slip). Alert the owner exactly ONCE so they can step in and close
         // the sale. markSeen() is the dedup guard (writes the "seen" row); we only
         // notify when it actually created the row. The push itself is deferred via
-        // after() so the customer's reply below is not delayed by it.
+        // after() so the customer's reply below is not delayed by it. Wrapped in
+        // try/catch so a Sheets error only skips the alert — never the reply.
         const firstMsg = event.message.type === "text" ? event.message.text : "(สติกเกอร์/อื่นๆ)";
-        if (await markSeen(sessionUserId)) {
-          after(() => notifyAdminNewCustomer(sessionUserId, firstMsg));
+        try {
+          if (await markSeen(sessionUserId)) {
+            after(() => notifyAdminNewCustomer(sessionUserId, firstMsg));
+          }
+        } catch (mErr) {
+          console.error("[webhook] markSeen failed — skip alert, still reply:", mErr);
         }
       }
 
