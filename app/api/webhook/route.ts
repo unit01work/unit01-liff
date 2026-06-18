@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
 import { validateSignature } from "@line/bot-sdk";
 import { getLineClient } from "@/lib/line";
+import { buildWelcomeCard } from "@/lib/welcome-card";
 import { PRODUCTS_CACHE_TAG } from "@/lib/products";
 import { downloadLineImage, verifySlip } from "@/lib/slipok";
 import {
@@ -981,6 +982,30 @@ export async function POST(request: NextRequest) {
           console.log(`Replied to postback: ${action}`);
         } catch (replyErr) {
           console.error("Postback reply failed:", replyErr);
+        }
+        continue;
+      }
+
+      // ── Follow event (new friend / unblock) → welcome card ──
+      // Additive only: does not touch order / payment / slip handling below.
+      if (event.type === "follow") {
+        const followUserId = event.source?.userId || "";
+        let displayName = "";
+        try {
+          const profile = await getLineClient().getProfile(followUserId);
+          displayName = profile?.displayName || "";
+        } catch (profErr) {
+          // Never block the greeting if the profile lookup fails — fall back
+          // to a generic name (card still renders).
+          console.error("[follow] profile lookup failed:", profErr);
+        }
+        try {
+          const welcome = buildWelcomeCard(displayName);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await client.replyMessage({ replyToken, messages: [welcome as any] });
+          console.log(`Sent welcome card to follow: ${followUserId}`);
+        } catch (welcomeErr) {
+          console.error("Follow welcome reply failed:", welcomeErr);
         }
         continue;
       }
