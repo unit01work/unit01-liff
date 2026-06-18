@@ -125,7 +125,7 @@ function chatEnterReply() {
 /* ── reply builders ── */
 // Single fallback for any inbound text/sticker that matches no configured
 // keyword. Sent as a LINE Flex menu (per LINE message spec §3): three tappable
-// rows — How to order (opens the LIFF shop), View products (sends "CATALOG"),
+// rows — Order here (opens the LIFF shop), View products (sends "CATALOG"),
 // Contact us (sends "contact us", which CONTACT_KEYWORDS picks up). Each row's
 // whole box carries the action so the entire row is tappable.
 function fallbackReply() {
@@ -168,15 +168,15 @@ function fallbackReply() {
               ],
             },
             { type: "separator", color: "#EBE7E4" },
-            // Option 1: How to order → open shop (LIFF)
+            // Option 1: Order here → open shop (LIFF)
             {
               type: "box",
               layout: "horizontal",
               paddingAll: "lg",
-              action: { type: "uri", label: "How to order", uri: "https://liff.line.me/2010192572-jfj8ev6c" },
+              action: { type: "uri", label: "Order here", uri: "https://liff.line.me/2010192572-jfj8ev6c" },
               contents: [
                 { type: "text", text: "[ 1 ]", size: "xs", color: "#1A1A1A", weight: "bold", flex: 0 },
-                { type: "text", text: "How to order", size: "xs", color: "#1A1A1A", weight: "bold", margin: "lg", flex: 1 },
+                { type: "text", text: "Order here", size: "xs", color: "#1A1A1A", weight: "bold", margin: "lg", flex: 1 },
                 { type: "text", text: "›", size: "sm", color: "#C4BFBB", flex: 0, align: "end" },
               ],
             },
