@@ -185,6 +185,37 @@ export async function getSessionStatus(userId: string): Promise<string | null> {
 }
 
 /**
+ * Sweep EVERY row and delete any that have been silent past the timeout window,
+ * regardless of status (active / paused / seen) — mirroring the per-user lazy
+ * expiry in getSessionStatus, but for ALL customers at once. This makes the
+ * 60-min auto-close fire even when the customer who opened the handoff never
+ * messages again: any inbound webhook traffic from any user drives the cleanup,
+ * so the owner can never leave the bot silenced forever by forgetting to close.
+ * Piggybacked on the webhook (no cron). Returns the number of rows closed.
+ * The timeout is measured from lastCustomerMsgAt, so an actively-chatting
+ * customer keeps bumping their own timer and is never swept mid-conversation.
+ */
+export async function sweepExpiredSessions(): Promise<number> {
+  const sheet = await getTab();
+  const rows = await sheet.getRows();
+  const now = Date.now();
+  // Collect expired rows first, then delete from the highest row number down so
+  // the library's internal row-index bookkeeping isn't shifted under us.
+  const expired = rows.filter((r) => {
+    if (!(r.get("status") || "").trim()) return false;
+    const last = parseBkk(r.get("lastCustomerMsgAt") || "");
+    return last > 0 && now - last > TIMEOUT_MS;
+  });
+  expired.sort((a, b) => b.rowNumber - a.rowNumber);
+  let closed = 0;
+  for (const row of expired) {
+    await row.delete();
+    closed++;
+  }
+  return closed;
+}
+
+/**
  * Mark this customer as "seen" (owner alerted about their first bot interaction).
  * Returns true ONLY when a NEW row was created — i.e. this is the first time, so
  * the caller should notify the owner exactly once. If any row already exists

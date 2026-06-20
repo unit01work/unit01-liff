@@ -53,6 +53,7 @@ import {
   pauseBot,
   touchChatSession,
   endChatSession,
+  sweepExpiredSessions,
   notifyAdminNewChat,
   notifyAdminNewCustomer,
 } from "@/lib/chat-session";
@@ -913,6 +914,17 @@ export async function POST(request: NextRequest) {
         }
       } catch (expErr) {
         console.error("[webhook] Expiry check failed:", expErr);
+      }
+
+      // Auto-close chat/pause sessions silent past the timeout — even if the
+      // customer who opened them never returns. Any inbound traffic drives the
+      // sweep, so the owner can't leave the bot silenced forever by forgetting
+      // to tap "จบแชท". Off the hot path (inside after()), like the expiry sweep.
+      try {
+        const swept = await sweepExpiredSessions();
+        if (swept > 0) console.log(`[webhook] Auto-closed ${swept} stale chat session(s)`);
+      } catch (sweepErr) {
+        console.error("[webhook] Session sweep failed:", sweepErr);
       }
     });
 
