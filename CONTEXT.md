@@ -219,6 +219,13 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 - **ย่อการ์ดแจ้งเตือนให้เล็ก/ไม่รก (commit `2bf3cc3`):** `buildAdminCard` เปลี่ยน bubble เป็น `size: "kilo"`, รูปโปรไฟล์จาก hero เต็มจอ → avatar เล็ก `xxs` ข้างชื่อ (แถว horizontal), ตัด hint ยาว + บรรทัด "เวลา:" ออก (เหลือ HH:MM สั้น), ปุ่ม `height: sm`. **หมายเหตุ: `cornerRadius` บน image โดน LINE validator ปฏิเสธ (error 400) — ถอดออก**
 - เทสต์: พรีวิวการ์ดยิงเข้า LINE เจ้าของ (uid=PREVIEW ปุ่มไม่มีผล) ผ่าน, `npx tsc --noEmit` + `npm run build` ผ่าน, deploy production live (verify `/api/webhook` ok + `/api/products` ปกติ)
 
+## Chat session auto-close — กวาด session ค้างทุก inbound (merge + ขึ้น production แล้ว 2026-06-20, commit `a915e0b`)
+แก้ปัญหา **เจ้าของลืมกด "จบแชท"** → บอทเงียบกับลูกค้าคนนั้นค้างยาว. เดิม timeout 60 นาทีเช็คแบบ lazy เฉพาะตอน **ลูกค้าคนเดิม** ทักกลับมา (`getSessionStatus`) — ถ้าลูกค้าหายไปเลยไม่ทักอีก row จะค้างในชีตตลอด บอทไม่กลับมาเอง
+- **ฟังก์ชันใหม่ `sweepExpiredSessions()` ใน `lib/chat-session.ts`:** กวาดทุก row ลบอันที่เงียบเกิน `TIMEOUT_MS` (60 นาที) **ทุกสถานะ** (active/paused/seen) — mirror logic lazy-expiry เดิม แต่ทำทีเดียวทุกคน. ลบจาก `rowNumber` มาก→น้อย กัน index เลื่อนตอนลบหลายแถว. คืนจำนวน row ที่ปิด
+- **เรียกใน `app/api/webhook/route.ts` ในบล็อก `after()` เดียวกับ expiry-sweep** (off hot path — รันหลัง flush response ไม่หน่วงการตอบลูกค้า) ครอบ try/catch แยก ถ้าพังไม่กระทบ flow อื่น. มี log `Auto-closed N stale chat session(s)`
+- **ผล:** ทุกครั้งที่ลูกค้า **คนไหนก็ได้** ทักเข้า OA → กวาดปิด session ที่หมดเวลาให้หมด → ถึงเจ้าของลืมกดปิด บอทกลับมาทำงานเองภายในไม่กี่นาทีหลังครบ 60 นาที โดยไม่ต้องรอลูกค้าคนเดิม. **timeout ยังนับจาก `lastCustomerMsgAt`** → แชทที่กำลังคุยอยู่ (ลูกค้ายังพิมพ์) ไม่มีทางโดนกวาดกลางคัน
+- เทสต์: `npx tsc --noEmit` + `npm run build` ผ่าน, deploy verify จาก GitHub deployment status (Vercel state=success)
+
 ---
 
 ## Welcome card ตอน follow (เพื่อนใหม่/ปลดบล็อก) (merge + ขึ้น production แล้ว 2026-06-19)
