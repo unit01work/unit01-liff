@@ -11,8 +11,26 @@ import { ScreenShipping, type ShippingInfo } from "@/components/ShippingForm";
 import { ClosingOverlay } from "@/components/ClosingOverlay";
 import { LoadingOverlay, type OrderErrorKind } from "@/components/LoadingOverlay";
 import { EditForm } from "@/components/EditForm";
+import { track } from "@vercel/analytics";
 
 type Screen = "products" | "cart" | "shipping" | "creating" | "closing";
+
+// Funnel step labels for analytics (where the customer is in the buy flow).
+// Maps the internal Screen state → a stable event name we can read in Vercel
+// Analytics. Purely for measurement — never affects order/payment logic.
+const FUNNEL_STEP: Record<Screen, string> = {
+  products: "shop_view_products",   // opened the shop / browsing
+  cart: "shop_view_cart",           // added to cart / viewing cart
+  shipping: "shop_enter_address",   // reached the address form
+  creating: "shop_submit_order",    // pressed confirm, order being created
+  closing: "shop_order_created",    // order created → QR shown (success)
+};
+
+// Fire-and-forget funnel tracking. track() never throws into render and is a
+// no-op if analytics is disabled, so this cannot break the buy flow.
+function trackFunnel(screen: Screen) {
+  try { track(FUNNEL_STEP[screen]); } catch { /* analytics must never break checkout */ }
+}
 
 function ShopPageInner() {
   const searchParams = useSearchParams();
@@ -304,6 +322,12 @@ function ShopFlow() {
   const [shippingFee, setShippingFee] = useState(0);
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [customerPrefill, setCustomerPrefill] = useState<ShippingInfo | null>(null);
+
+  // Funnel analytics: emit a step event whenever the screen changes (and once on
+  // mount for the initial "view products"). Additive/measurement-only.
+  useEffect(() => {
+    trackFunnel(screen);
+  }, [screen]);
 
   // Load returning customer data
   useEffect(() => {

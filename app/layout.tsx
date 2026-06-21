@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { Analytics } from "@vercel/analytics/next";
 import { UserProvider } from "@/lib/user-context";
 import "./globals.css";
 
@@ -29,6 +30,7 @@ export default function RootLayout({
       </head>
       <body>
           <UserProvider>{children}</UserProvider>
+          <Analytics />
       </body>
     </html>
   );
