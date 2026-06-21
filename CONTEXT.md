@@ -246,6 +246,17 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 
 ---
 
+## Analytics — Vercel Analytics + funnel การซื้อใน LIFF (merge + ขึ้น production แล้ว 2026-06-21, commit `8b2e77d`)
+เดิม **หน้าร้าน LIFF ไม่เก็บสถิติเลย** — มองไม่เห็นว่าลูกค้าหลุดขั้นไหน (Shopify Analytics เห็นแค่หน้าร้าน Shopify ไม่ใช่ LIFF ที่ขายจริง). เพิ่ม **`@vercel/analytics`** วัด pageview + funnel ราย step. **เพิ่มแบบ additive/measurement-only — ไม่แตะ logic checkout/จ่ายเงินเลย**
+- **pageview:** `<Analytics />` (`@vercel/analytics/next`) ใน `app/layout.tsx`
+- **funnel การซื้อ (`app/shop/page.tsx`, ShopFlow):** `useEffect` ยิง `track()` ทุกครั้งที่ `screen` เปลี่ยน — map state machine `products→cart→shipping→creating→closing` เป็น event: `shop_view_products` (เปิดร้าน) → `shop_view_cart` (ใส่ตะกร้า) → `shop_enter_address` (กรอกที่อยู่) → `shop_submit_order` (กดยืนยัน) → `shop_order_created` (ออเดอร์สร้าง = เห็น QR). ดู step ที่คนหลุดเยอะสุดได้
+- **กัน checkout พัง:** `trackFunnel()` ห่อ `track()` ใน try/catch + fire-and-forget — analytics พังยังไงก็ไม่กระทบการสั่งซื้อ
+- ตรวจ: `tsc --noEmit` + `npm run build` ผ่านทั้งคู่
+- **⚠️ ต้องทำเองใน Vercel:** เปิด **Web Analytics** ใน Vercel dashboard (โปรเจกต์ → แท็บ Analytics → Enable) ข้อมูลถึงจะเริ่มเก็บ — โค้ดพร้อมแล้วแต่ data จะนิ่งหลังเปิด + รอลูกค้าผ่าน funnel จริงสัก 1-2 สัปดาห์
+- **ยังไม่มี:** funnel ฝั่ง LINE หลังออกจาก LIFF (เห็น QR แล้วจ่าย/ไม่จ่าย) — จุดนั้นอยู่ในแชท LINE ไม่ใช่หน้าเว็บ ต้องวัดจาก Orders sheet (PENDING→PAID→EXPIRED) แทน
+
+---
+
 ## Payment replies เป็น Flex card (merge + ขึ้น production แล้ว 2026-06-14)
 เปลี่ยนข้อความตอบหลังส่งสลิป "จ่ายสำเร็จ / สลิปไม่ผ่าน" จาก plain text → Flex card. **แตะแค่ "ข้อความตอบ" ใน `app/api/webhook/route.ts` 3 ฟังก์ชัน** ไม่แตะ logic ตรวจสลิป/SlipOK/สร้าง Shopify order/claimPaymentForUser
 - **`replyConfirmPayment()` (จ่ายสำเร็จ):** ข้อความ1 = Flex สีเขียว `#5B805E` (ตัวอักษรเขียวล้วน ไม่มีแถบสีบน ไม่มีปุ่ม): kicker `ORDER CONFIRMED   [ Paid ]` (xs เขียว) / `#UT-xxxxxx · ฿xxxx` (sm เทา) / `YOUR FIRST UNIT. USE IT WELL.` (sm หนา บรรทัดเดียว — ย่อจาก md/2บรรทัด ตาม feedback). **ข้อความ2 (เดดไลน์ edit-lock) ยังเป็น plain text แยกเหมือนเดิม** (owned by edit-lock — ไม่แตะ)
