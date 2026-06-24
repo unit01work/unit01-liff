@@ -979,11 +979,39 @@ export async function POST(request: NextRequest) {
 
     for (const event of events) {
       // LINE OA native manual chat ("กำลังแชทแบบแมนนวล" in OA Manager) takes the
-      // conversation over and delivers its events in standby mode. The bot MUST
-      // stay completely silent then, or it intrudes on the live human chat
-      // (e.g. dropping the fallback menu mid-conversation). Normal traffic is
-      // always mode === "active", so this never affects regular sales.
-      if (event.mode && event.mode !== "active") continue;
+      // conversation over and delivers its events in STANDBY mode. The bot MUST
+      // stay silent on the conversation then, or it intrudes on the live human
+      // chat (e.g. dropping the fallback menu mid-conversation).
+      //
+      // EXCEPTION — payment slips. A customer who pays while the owner is chatting
+      // manually would otherwise have their slip silently dropped and the order
+      // auto-expire (root cause of the 2026-06-24 missed-slip incident: LINE DID
+      // deliver the slip image, but as a standby event we skipped). So in standby
+      // we still verify slip IMAGES (mark PAID + sync Shopify); everything else
+      // stays silent. The result is sent via pushMessage because a standby event's
+      // replyToken cannot be used to reply. silentOnInvalid = true keeps non-slip
+      // photos noiseless — only a REAL payment produces a confirmation/orphan push.
+      if (event.mode && event.mode !== "active") {
+        if (event.type === "message" && event.message?.type === "image") {
+          const sbUserId = event.source?.userId || "";
+          const sbMessageId = event.message.id;
+          // Off the hot path so LINE still gets a fast 200 (SlipOK + Shopify are slow).
+          after(async () => {
+            try {
+              const sbMsgs = await handleSlipImage(sbMessageId, sbUserId, true);
+              if (sbMsgs && sbMsgs.length > 0 && sbUserId) {
+                await getLineClient()
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  .pushMessage({ to: sbUserId, messages: sbMsgs as any })
+                  .catch((e) => console.error("[webhook] standby slip push failed:", e));
+              }
+            } catch (sbErr) {
+              console.error("[webhook] standby slip processing failed:", sbErr);
+            }
+          });
+        }
+        continue;
+      }
       if (!event.replyToken) continue;
       const replyToken: string = event.replyToken;
       let messages;

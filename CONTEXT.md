@@ -228,6 +228,30 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 
 ---
 
+## Change Size รองรับออเดอร์หลายตัว — เลือกตัวที่จะแก้ก่อน (merge + ขึ้น production แล้ว 2026-06-24, commit `3e31d6a`)
+แก้ปัญหา: ออเดอร์ที่มี **สินค้า 2-3 ตัวในใบเดียว** (เช่นสั่ง S + M) เดิมพอกด "Change size" ระบบให้เลือกได้แค่ตัวเดียว (ตัวแรก) → แก้ผิดตัว และ `updateOrderSize` เก่า **เขียนทับ variant ทุกตัวเป็นตัวใหม่** → ทำพี่น้องในออเดอร์พังหมด. เลือกแนวทาง A (เปลี่ยนได้ครั้งเดียวต่อออเดอร์ + มีตัวเลือกว่าจะแก้ตัวไหน)
+- **`handleChangeSize(orderId)` ใน `app/api/webhook/route.ts`** เป็นตัวแยกทาง: `parseOrderItems(order).filter(it => it.variantId)` → 0 ตัว = error text · **1 ตัว = `return handleChangeSizeItem(orderId, items[0].variantId)` (ข้าม picker ตรงไปหน้าเลือกไซส์ = UX เดิมเป๊ะ)** · **>1 ตัว = `buildPickItemFlex({ orderId, items })`** เด้งการ์ด "SELECT ITEM" ให้เลือกก่อน
+- **`handleChangeSizeItem(orderId, oldVariantId)` (ฟังก์ชันใหม่ แยกจากตัวเก่า):** หา target ตาม variant ที่เลือก (fallback items[0]) → เช็ค lock 10:00 + Size Changed ซ้ำอีกชั้น (กันลูกค้าค้างที่ picker) → ส่งหน้าเลือกไซส์ของ "ตัวนั้น" พร้อม size guide. ปุ่มไซส์แนบ `&old=<variantId เดิม>` ไปด้วย
+- **`handleSelectSize(orderId, newSize, newVariantId, oldVariantIdParam="")`:** resolve target จาก `old` (multi-item safe, fallback items[0] สำหรับการ์ดเก่าที่ไม่มี `old`) → ส่ง `oldVariantId` เข้า `updateOrderSize`
+- **`updateOrderSize(..., oldVariantId)` ใน `lib/sheets.ts` (แก้บั๊กตัวจริง):** `Items` (`"ชื่อ (Size) xQty, ..."`) กับ `Variant IDs` (`"vid:qty,vid:qty"`) zip ดัชนีตรงกัน → หา index จาก `oldVariantId` แล้วแก้ **เฉพาะ index นั้น** ในทั้ง 2 ช่อง (size token + variant) ตัวอื่นไม่แตะ
+- **postback router:** เพิ่ม `case "change_size_item"` (อ่าน `old` → `handleChangeSizeItem`) · `select_size` อ่าน `old` ส่งต่อให้ `handleSelectSize`
+- **UI การ์ด `buildPickItemFlex` ใน `lib/flex-messages.ts`:** bubble `kilo` หัว #E5E0DD "SELECT ITEM" + ปุ่มสินค้าใช้ LINE `button` มาตรฐาน (style primary #1A1A1A height sm) ขนาดเท่าการ์ดเลือกไซส์เดิม. `buildChangeSizeFlex` เพิ่ม param `oldVariantId` แนบใน postback ปุ่มไซส์
+- **gate ชัดเจน:** ออเดอร์ 1 ตัว = พฤติกรรม/แจ้งเตือน/lock เหมือนเดิม 100% · ฟีเจอร์ใหม่ trigger เฉพาะ >1 ตัว · cart/payment/order alert คนละ path ไม่ถูกแตะ
+- เทสต์: preview ยิง Flex จริงเข้าไลน์เจ้าของ (ปรับขนาดปุ่มหลายรอบ จบที่ button มาตรฐาน), `npx tsc --noEmit` + `npm run build` ผ่าน, deploy verify GitHub deployment status (Vercel state=success)
+
+---
+
+## สลิปหายตอนเจ้าของแชทแมนนวลของ LINE (standby mode) — แก้แล้ว (merge + ขึ้น production แล้ว 2026-06-25)
+**เคสจริง 2026-06-24:** เจ้าของกด **"แชทแบบแมนนวล" ของ LINE OA เอง** (ไม่ใช่ปุ่ม "⏸️ ปิดบอท" ของระบบเรา) แล้วไปคุยกับลูกค้า → ลูกค้าโอน ฿2,190 ส่งสลิป 19:54 → บอทไม่ตรวจ → ออเดอร์ `#UT-S2P5AJ` (สร้าง 19:52) หมดอายุ EXPIRED เงียบๆ
+- **หลักฐาน:** `chat_sessions` ว่าง (ไม่ได้ใช้ pauseBot ของเรา) · ออเดอร์ EXPIRED, PaidAt ว่าง · ไม่มี row ใน Orphan Payments → สลิปไม่เคยถูกประมวลผลเลย
+- **Root cause (แม่นยำ):** LINE OA โหมดแชทแมนนวล **ส่ง event เข้ามาจริงแต่เป็น `mode: "standby"`** — โค้ดเดิมที่ `app/api/webhook/route.ts` มี `if (event.mode && event.mode !== "active") continue;` → **ทิ้งทุก standby event ทั้งรูปสลิป** → `handleSlipImage` ไม่ถูกเรียก
+- **แก้:** ใน standby ยังประมวลผล **รูปภาพ (สลิป) ต่อ** — เรียก `handleSlipImage(messageId, userId, silentOnInvalid=true)` ใน `after()` (off hot path), แล้วส่งผลด้วย **`pushMessage`** (ห้ามใช้ replyToken ในโหมด standby). อย่างอื่น (text/sticker) ยังเงียบเหมือนเดิม. `silentOnInvalid=true` → รูปที่ไม่ใช่สลิปไม่ส่งอะไร, เฉพาะสลิปจริงเท่านั้นที่ confirm/orphan
+- **เป็น additive:** โหมด `active` (ทราฟฟิกปกติ) ไม่เปลี่ยนพฤติกรรมเลย — แก้เฉพาะ standby + image ที่เดิมถูกทิ้ง
+- **วิธีใช้ที่แนะนำเจ้าของ:** ยังควรใช้ปุ่ม **"⏸️ ปิดบอท"** ของระบบเรา (สลิปยัง active ตรวจปกติ + จองสต็อกครบ) แต่ตอนนี้ถึงเผลอกด "แชทแบบแมนนวล" ของ LINE สลิปก็ไม่หายแล้ว
+- เทสต์: `npx tsc --noEmit` + `npm run build` ผ่าน
+
+---
+
 ## Welcome card ตอน follow (เพื่อนใหม่/ปลดบล็อก) (merge + ขึ้น production แล้ว 2026-06-19)
 การ์ดต้อนรับยิงอัตโนมัติเมื่อมีคนแอดเพื่อน LINE OA. **เพิ่มแบบ additive — ไม่แตะ flow ข้อความ/จ่ายเงิน/ออเดอร์เลย** (commit `0ebdafe` รูป + `a283547` handler)
 - **handler:** ใน `app/api/webhook/route.ts` เพิ่มสาขา `if (event.type === "follow")` (เดิม event ที่ไม่ใช่ message ถูก `continue` ข้าม) → ดึงชื่อจาก `getProfile(userId)` แล้ว `client.replyMessage(replyToken, ...)`. ใช้ **reply (ฟรี ไม่กินโควต้า push)** เพราะ follow event มี replyToken
