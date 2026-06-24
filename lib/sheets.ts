@@ -835,7 +835,8 @@ export async function updateOrderSize(
   orderId: string,
   oldSize: string,
   newSize: string,
-  newVariantId: string
+  newVariantId: string,
+  oldVariantId: string
 ): Promise<boolean> {
   const doc = getDoc();
   await doc.loadInfo();
@@ -847,26 +848,37 @@ export async function updateOrderSize(
   const row = rows.find((r) => matchOrderId(r.get("Order ID") || "", orderId));
   if (!row) return false;
 
-  // Update Items text: replace size reference
-  const items = row.get("Items") || "";
-  const updatedItems = items.replace(
-    new RegExp(`\\(${oldSize}\\)`, "i"),
-    `(${newSize})`
-  );
-  row.set("Items", updatedItems);
+  // Multi-item safe: operate ONLY on the line item whose variant matches
+  // oldVariantId. Items ("Name (Size) xQty, ...") and Variant IDs
+  // ("vid:qty,vid:qty") are zipped index-for-index, so we find the index in
+  // Variant IDs, then edit that same index in both fields — leaving every other
+  // line item untouched. (The old code rewrote EVERY variant to newVariantId,
+  // corrupting sibling items in 2+ item orders.)
+  const itemParts = (row.get("Items") || "").split(",").map((p: string) => p.trim()).filter(Boolean);
+  const vidParts = (row.get("Variant IDs") || "").split(",").map((p: string) => p.trim()).filter(Boolean);
 
-  // Update Variant IDs: replace old variant with new
-  const variantIds = row.get("Variant IDs") || "";
-  // Format: "variantId:qty" — replace the variant ID portion
-  const parts = variantIds.split(",").map((p: string) => p.trim());
-  const updatedParts = parts.map((p: string) => {
-    const [, qty] = p.split(":");
-    // If this is the item being changed, use new variant ID
-    // For single-item orders this is straightforward
-    return `${newVariantId}:${qty || "1"}`;
-  });
-  row.set("Variant IDs", updatedParts.join(","));
+  // Locate the target item by variant id; fall back to index 0 for legacy
+  // single-item cards whose postback didn't carry oldVariantId.
+  let idx = vidParts.findIndex((p: string) => p.split(":")[0] === oldVariantId);
+  if (idx < 0) idx = 0;
 
+  // Edit the size token of just this item ("...(S) x1" → "...(L) x1").
+  // Prefer an exact "(oldSize)" match; fall back to the first parenthesis group
+  // if the stored token differs in case/spacing.
+  if (itemParts[idx] !== undefined) {
+    const exact = new RegExp(`\\(${oldSize}\\)`, "i");
+    itemParts[idx] = exact.test(itemParts[idx])
+      ? itemParts[idx].replace(exact, `(${newSize})`)
+      : itemParts[idx].replace(/\(([^)]+)\)/, `(${newSize})`);
+  }
+  // Swap just this item's variant id, preserving its quantity.
+  if (vidParts[idx] !== undefined) {
+    const qty = vidParts[idx].split(":")[1] || "1";
+    vidParts[idx] = `${newVariantId}:${qty}`;
+  }
+
+  row.set("Items", itemParts.join(", "));
+  row.set("Variant IDs", vidParts.join(","));
   row.set("Size Changed", "YES");
   row.set("Updated At", nowBKK());
   await row.save();

@@ -12,6 +12,7 @@ import {
   getOrder,
   setOrderSyncStatus,
   updateOrderSize,
+  parseOrderItems,
   findLatestOrderByUser,
   findActiveOrders,
   findExpiredOrders,
@@ -36,6 +37,7 @@ import {
 import {
   buildContactFlex,
   buildChangeSizeFlex,
+  buildPickItemFlex,
   buildContactMenuNoOrder,
   buildSelectOrderFlex,
 } from "@/lib/flex-messages";
@@ -468,7 +470,7 @@ async function handleChangeSize(orderId: string) {
     return [{ type: "text" as const, text: buildLockedMessage(orderId) }];
   }
 
-  // Check if already changed
+  // Check if already changed (one size change per order — business rule).
   if (order["Size Changed"] === "YES") {
     const displayId = `#${orderId.replace("#", "")}`;
     return [{
@@ -477,18 +479,46 @@ async function handleChangeSize(orderId: string) {
     }];
   }
 
-  // Parse current item info from Items field: "Product Name (Size) x1"
-  const itemsStr = order["Items"] || "";
-  const itemMatch = itemsStr.match(/^(.+?)\s*\((\w+)\)\s*x(\d+)/);
-  if (!itemMatch) {
+  // Multi-item: let the customer choose WHICH line item to resize. A single-item
+  // order skips the picker and goes straight to the size buttons (unchanged UX).
+  const items = parseOrderItems(order).filter((it) => it.variantId);
+  if (items.length === 0) {
     return [{ type: "text" as const, text: "[ x ] Unable to read current size.\nType [ Contact Us ]." }];
   }
-  const productName = itemMatch[1].trim();
-  const currentSize = itemMatch[2];
+  if (items.length === 1) {
+    return handleChangeSizeItem(orderId, items[0].variantId);
+  }
+  return [buildPickItemFlex({ orderId, items })];
+}
 
-  // Get variant IDs to find the product
-  const variantIds = order["Variant IDs"] || "";
-  const currentVariantId = variantIds.split(":")[0];
+// Show the size picker for ONE specific line item (identified by its variant id).
+// Shared by the single-item fast path and the multi-item "pick item" step.
+async function handleChangeSizeItem(orderId: string, oldVariantId: string) {
+  const order = await getOrder(orderId);
+  if (!order) return [{ type: "text" as const, text: "Order not found." }];
+
+  // Re-check lock + already-changed at this step (defense in depth — the
+  // customer may have lingered on the item picker).
+  if (isEditLocked(order)) {
+    return [{ type: "text" as const, text: buildLockedMessage(orderId) }];
+  }
+  if (order["Size Changed"] === "YES") {
+    const displayId = `#${orderId.replace("#", "")}`;
+    return [{
+      type: "text" as const,
+      text: `Size for order ${displayId} has already been changed.\nType [ Contact Us ] for further changes.`,
+    }];
+  }
+
+  // Locate the chosen item; fall back to the first item for legacy callers.
+  const items = parseOrderItems(order).filter((it) => it.variantId);
+  const target = items.find((it) => it.variantId === oldVariantId) || items[0];
+  if (!target) {
+    return [{ type: "text" as const, text: "[ x ] Unable to read current size.\nType [ Contact Us ]." }];
+  }
+  const productName = target.product;
+  const currentSize = target.size;
+  const currentVariantId = target.variantId;
   if (!currentVariantId) {
     return [{ type: "text" as const, text: "[ x ] Size information unavailable.\nType [ Contact Us ]." }];
   }
@@ -559,18 +589,25 @@ async function handleChangeSize(orderId: string) {
     console.log("[webhook] Size chart not available:", e);
   }
 
-  // Flex message to select size
+  // Flex message to select size — carry oldVariantId so the commit step swaps
+  // the correct line item in multi-item orders.
   messages.push(buildChangeSizeFlex({
     orderId,
     productName,
     currentSize,
     availableSizes,
+    oldVariantId: currentVariantId,
   }));
 
   return messages;
 }
 
-async function handleSelectSize(orderId: string, newSize: string, newVariantId: string) {
+async function handleSelectSize(
+  orderId: string,
+  newSize: string,
+  newVariantId: string,
+  oldVariantIdParam: string = ""
+) {
   const order = await getOrder(orderId);
   if (!order) return [{ type: "text" as const, text: "Order not found." }];
 
@@ -619,17 +656,18 @@ async function handleSelectSize(orderId: string, newSize: string, newVariantId: 
     }
   }
 
-  // Parse current size from Items
-  const itemsStr = order["Items"] || "";
-  const itemMatch = itemsStr.match(/^(.+?)\s*\((\w+)\)\s*x(\d+)/);
-  const productName = itemMatch ? itemMatch[1].trim() : "Product";
-  const oldSize = itemMatch ? itemMatch[2] : "?";
+  // Resolve WHICH line item is being changed. `oldVariantIdParam` comes from the
+  // size-button postback (multi-item safe). Fall back to the first item for
+  // legacy cards whose postback predates this field.
+  const items = parseOrderItems(order).filter((it) => it.variantId);
+  const target =
+    items.find((it) => it.variantId === oldVariantIdParam) || items[0] || null;
+  const productName = target?.product || "Product";
+  const oldSize = target?.size || "?";
+  const oldVariantId = target?.variantId || (order["Variant IDs"] || "").split(":")[0];
 
-  // Get old variant ID before updating sheets
-  const oldVariantId = (order["Variant IDs"] || "").split(":")[0];
-
-  // Update Google Sheets
-  await updateOrderSize(orderId, oldSize, newSize, newVariantId);
+  // Update Google Sheets (only the matched line item is rewritten).
+  await updateOrderSize(orderId, oldSize, newSize, newVariantId, oldVariantId);
 
   // Update Shopify Order line item variant.
   // The sheet is already updated above — if Shopify fails we must NOT stay
@@ -963,6 +1001,13 @@ export async function POST(request: NextRequest) {
           case "change_size":
             messages = await handleChangeSize(postbackOrderId);
             break;
+          case "change_size_item": {
+            // Multi-item: customer picked which line item to resize → show its
+            // size buttons. `old` is the chosen item's current variant id.
+            const old = params.get("old") || "";
+            messages = await handleChangeSizeItem(postbackOrderId, old);
+            break;
+          }
           case "track":
             messages = await handleTrackOrder(postbackOrderId);
             break;
@@ -1014,7 +1059,8 @@ export async function POST(request: NextRequest) {
           case "select_size": {
             const size = params.get("size") || "";
             const variantId = params.get("variantId") || "";
-            messages = await handleSelectSize(postbackOrderId, size, variantId);
+            const old = params.get("old") || "";
+            messages = await handleSelectSize(postbackOrderId, size, variantId, old);
             break;
           }
           // Rich Menu menu actions (no orderId)

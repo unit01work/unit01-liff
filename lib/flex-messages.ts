@@ -416,11 +416,13 @@ export function buildChangeSizeFlex({
   productName,
   currentSize,
   availableSizes,
+  oldVariantId = "",
 }: {
   orderId: string;
   productName: string;
   currentSize: string;
   availableSizes: { size: string; variantId: string }[];
+  oldVariantId?: string;
 }) {
   const cleanId = orderId.replace("#", "");
   const displayId = orderId.startsWith("#") ? orderId : `#${orderId}`;
@@ -430,7 +432,8 @@ export function buildChangeSizeFlex({
     action: {
       type: "postback",
       label: s.size,
-      data: `action=select_size&orderId=${cleanId}&size=${s.size}&variantId=${s.variantId}`,
+      // `old` tells the commit handler WHICH line item to swap (multi-item safe).
+      data: `action=select_size&orderId=${cleanId}&size=${s.size}&variantId=${s.variantId}&old=${oldVariantId}`,
       displayText: `Size ${s.size}`,
     },
     style: "primary",
@@ -499,6 +502,73 @@ export function buildChangeSizeFlex({
                   },
                 ],
               },
+            ],
+          },
+        ],
+      },
+    },
+  };
+}
+
+/**
+ * Pick-an-item Flex — shown FIRST when an order has 2+ line items, so the
+ * customer chooses WHICH item to resize before seeing the size buttons. Each
+ * button carries that item's variant id as `old` so the next step targets the
+ * right line item. Single-item orders skip this and go straight to the sizes.
+ */
+export function buildPickItemFlex({
+  orderId,
+  items,
+}: {
+  orderId: string;
+  items: { product: string; size: string; variantId: string; qty: number }[];
+}) {
+  const cleanId = orderId.replace("#", "");
+  const displayId = orderId.startsWith("#") ? orderId : `#${orderId}`;
+
+  // Standard LINE buttons — same look/size as the original size-picker card.
+  const itemButtons = items.map((it) => ({
+    type: "button",
+    action: {
+      type: "postback",
+      label: `${it.size} · ${it.product}`.slice(0, 40),
+      data: `action=change_size_item&orderId=${cleanId}&old=${it.variantId}`,
+      displayText: `Change ${it.product} (${it.size})`,
+    },
+    style: "primary",
+    color: "#1A1A1A",
+    height: "sm",
+    margin: "sm",
+  }));
+
+  return {
+    type: "flex",
+    altText: `Change Size ${displayId}`,
+    contents: {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "none",
+        contents: [
+          {
+            type: "box",
+            layout: "vertical",
+            backgroundColor: "#E5E0DD",
+            paddingAll: "lg",
+            contents: [
+              { type: "text", text: "CHANGE SIZE", size: "xxs", color: "#555555", weight: "bold" },
+              { type: "text", text: displayId, size: "sm", color: "#1A1A1A", weight: "bold", margin: "xs" },
+            ],
+          },
+          {
+            type: "box",
+            layout: "vertical",
+            paddingAll: "lg",
+            contents: [
+              { type: "text", text: "SELECT ITEM", size: "xxs", color: "#999999", weight: "bold" },
+              ...itemButtons,
             ],
           },
         ],
