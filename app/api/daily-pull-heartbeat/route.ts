@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { resolveWindow } from "@/lib/daily-pull/window";
 import { worklistTabStatus } from "@/lib/daily-pull/sheets";
 import { pushAdmin } from "@/lib/daily-pull/notify";
+import { CUTOFF_TIME } from "@/lib/config";
 
 /**
  * Heartbeat for the daily-pull worklist (never-silent guard).
@@ -32,7 +33,7 @@ export async function GET(request: NextRequest) {
     const status = await worklistTabStatus(w.dateLabel);
 
     if (!status.exists) {
-      const msg = `ระบบดึงออเดอร์ 10:00 ไม่ทำงาน ตรวจด่วน (worklist วันที่ ${w.dateLabel} ยังไม่ถูกสร้าง)`;
+      const msg = `ระบบดึงออเดอร์ ${CUTOFF_TIME} ไม่ทำงาน ตรวจด่วน (worklist วันที่ ${w.dateLabel} ยังไม่ถูกสร้าง)`;
       if (!silent) await pushAdmin(msg);
       return NextResponse.json({
         ok: false,

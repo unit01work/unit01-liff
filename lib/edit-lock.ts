@@ -1,11 +1,11 @@
 /**
  * EDIT-LOCK — per-order edit deadline (Asia/Bangkok).
  *
- * Rule: a customer may edit shipping address / size until 10:00 ICT of the
- * "cutoff day", computed from when the order was paid:
- *   cutoffToday = <paid date> 10:00
- *   paid <= cutoffToday  → deadline = cutoffToday          (paid before 10:00)
- *   paid >  cutoffToday  → deadline = cutoffToday + 1 day  (paid after 10:00)
+ * Rule: a customer may edit shipping address / size until the CUTOFF_TIME ICT
+ * (see lib/config) of the "cutoff day", computed from when the order was paid:
+ *   cutoffToday = <paid date> CUTOFF_TIME
+ *   paid <= cutoffToday  → deadline = cutoffToday          (paid before cutoff)
+ *   paid >  cutoffToday  → deadline = cutoffToday + 1 day  (paid after cutoff)
  *
  * Timestamps are stored as fixed-width Bangkok-local "YYYY-MM-DD HH:MM" strings
  * (see nowBKK in lib/sheets). Fixed-width strings sort chronologically, so we
@@ -17,6 +17,7 @@
 
 // Type-only import (erased at compile time — no runtime dependency on sheets).
 import type { OrderRow } from "./sheets";
+import { CUTOFF_TIME } from "./config";
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -59,16 +60,16 @@ export function computeEditDeadline(paidAtRaw: string): string {
   const m = paidAt.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return "";
   const [, y, mo, d] = m;
-  const cutoffToday = `${y}-${mo}-${d} 10:00`;
-  // Paid at or before 10:00 on the paid date → deadline is that day's 10:00.
+  const cutoffToday = `${y}-${mo}-${d} ${CUTOFF_TIME}`;
+  // Paid at or before the cutoff on the paid date → deadline is that day's cutoff.
   if (paidAt <= cutoffToday) return cutoffToday;
-  // Paid after 10:00 → deadline rolls to the next calendar day's 10:00.
+  // Paid after the cutoff → deadline rolls to the next calendar day's cutoff.
   // Use UTC date math purely to advance the calendar date (no tz involved).
   const next = new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d) + 1));
   const ny = next.getUTCFullYear();
   const nmo = String(next.getUTCMonth() + 1).padStart(2, "0");
   const nd = String(next.getUTCDate()).padStart(2, "0");
-  return `${ny}-${nmo}-${nd} 10:00`;
+  return `${ny}-${nmo}-${nd} ${CUTOFF_TIME}`;
 }
 
 /**

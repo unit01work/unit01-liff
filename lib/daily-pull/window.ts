@@ -1,11 +1,13 @@
 // Window / cutoff logic. The hard rule from the spec:
-//   "today's round" = yesterday 10:00 ICT -> today 10:00 ICT (24h),
-//   sliced by the order's *paid* time vs 10:00:00 exactly (not when cron runs).
-// All comparisons are done in Asia/Bangkok (+7), so paid 09:59 lands in today
-// and paid 10:01 rolls to tomorrow, regardless of cron drift.
+//   "today's round" = yesterday CUTOFF ICT -> today CUTOFF ICT (24h),
+//   sliced by the order's *paid* time vs the CUTOFF exactly (not when cron runs).
+// CUTOFF is CUTOFF_HOUR:CUTOFF_MINUTE ICT (see lib/config). All comparisons are
+// done in Asia/Bangkok (+7), so a paid time one minute before the cutoff lands
+// in today and one minute after rolls to tomorrow, regardless of cron drift.
+
+import { CUTOFF_HOUR, CUTOFF_MINUTE } from "../config";
 
 const ICT_OFFSET_MS = 7 * 60 * 60 * 1000;
-const CUTOFF_HOUR = 10; // 10:00 ICT
 
 export interface PullWindow {
   // The round's date label (the ICT calendar date of the closing 10:00). This
@@ -43,11 +45,11 @@ export function ictParts(d: Date): {
   };
 }
 
-// The UTC instant of `YYYY-MM-DD 10:00:00` ICT.
+// The UTC instant of the cutoff (CUTOFF_HOUR:CUTOFF_MINUTE) ICT on a given day.
 function ictCutoffUtc(year: number, month: number, day: number): Date {
-  // 10:00 ICT == 03:00 UTC the same calendar day.
+  // CUTOFF_HOUR ICT == (CUTOFF_HOUR - 7) UTC the same calendar day.
   return new Date(
-    Date.UTC(year, month - 1, day, CUTOFF_HOUR, 0, 0) - ICT_OFFSET_MS
+    Date.UTC(year, month - 1, day, CUTOFF_HOUR, CUTOFF_MINUTE, 0) - ICT_OFFSET_MS
   );
 }
 
