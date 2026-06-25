@@ -293,6 +293,21 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 
 ---
 
+## Slip-verify resilience — กัน "ตรวจสลิปไม่ผ่าน" จาก system error (ขึ้น production แล้ว 2026-06-25)
+**Incident 2026-06-25:** ลูกค้าโอนเงินจริงแต่ได้ข้อความ `[ x ] SLIP NOT VERIFIED` ("อ่านสลิปไม่ออก") ทั้งที่สลิปปกติ — เจ้าของไม่เคยรู้. Root cause: `handleSlipImage` (`app/api/webhook/route.ts`) ห่อทุกขั้นด้วย try/catch อันเดียว → **throw ชั่วคราว** (LINE Content API / SlipOK non-200 / เน็ตหลุด) หรือ error ตอนบันทึก/สร้างออเดอร์ **ปลายทาง** → ตกลงมาเป็น `replyInvalidSlip()` เหมือนสลิปอ่านไม่ออก, แถมไม่มี alert หาเจ้าของ = เงินหายเงียบ.
+- **3 ชั้นแก้:**
+  1. **Auto-retry** (`lib/slipok.ts`): `withRetry(fn, label, attempts=3, baseDelayMs=400)` รีลองเฉพาะตอน **throw** (network/non-2xx/timeout) backoff linear 400/800ms — ครอบทั้ง `downloadLineImage` + `verifySlip`. **สำคัญ:** สร้าง `FormData`/`Blob` ใหม่ทุก attempt (body stream อ่านได้ครั้งเดียว). 200 ที่ `data.success===false` (สลิปอ่านไม่ออกจริง) = **ไม่ throw → ไม่ retry** caller จัดการเป็น invalid ตามเดิม.
+  2. **Owner alert** (`lib/order-sync.ts` → `alertOwnerSlipFailure({userId, when, stage, amount?, transRef?})`): push LINE หาเจ้าของ (ไทย) พร้อม userId + ชื่อลูกค้า (best-effort `getProfile`) + ยอด + Ref + เวลา. `stage: "verify"` (ยืนยันสลิปไม่ได้ ลูกค้าอาจจ่ายแล้ว) / `"process"` (สลิปผ่านแต่บันทึกพลาด เงินเข้าแล้ว).
+  3. **แยก try/catch** (`handleSlipImage`): **STEP 1 = download+verify** (throw → alert `stage:"verify"` + ตอบลูกค้า `replySlipSystemError()`), เช็ก `data.success` (false → `replyInvalidSlip()` เดิม ไม่แตะ), **STEP 2 = claim+persist+sync** (throw → alert `stage:"process"` + ตอบ `replyPaymentProcessing()`).
+- **ข้อความลูกค้าใหม่ (Flex mirror `replyInvalidSlip`, flag เหลือง `#8A6D2F`, ปุ่ม Contact us):**
+  - `replySlipSystemError()` → `[ ! ] CHECKING YOUR PAYMENT` / "We're having a brief issue verifying slips right now. Our team has been notified and will confirm your payment shortly — no need to pay again."
+  - `replyPaymentProcessing()` → `[ ! ] PAYMENT RECEIVED — PROCESSING` / "We've received your payment and are finalizing your order. Our team has been notified and will confirm shortly. Please don't pay again."
+  - `[ x ] SLIP NOT VERIFIED` (อ่านไม่ออกจริง) คงเดิม
+- **handoff (paused/active):** `silentOnInvalid=true` ยังเงียบทุก error path (return `[]`) เหมือนเดิม — ไม่แทรกแชทคน, ไม่ alert ซ้ำ (เจ้าของดูอยู่แล้ว).
+- ไฟล์: `lib/slipok.ts`, `lib/order-sync.ts`, `app/api/webhook/route.ts`. `tsc` ผ่าน, lint ไม่มี error ใหม่ (errors เดิมเป็น pre-existing). commit `c9eaccf`.
+
+---
+
 ## Monitoring / Guards (กันปัญหา sync ไม่ให้เกิดอีก)
 ออกแบบเป็น 4 ชั้น หลังเจอบั๊ก "จ่ายแล้ว/แก้แล้วแต่ Shopify ไม่อัพเดทแบบเงียบ" 2 รอบ:
 1. **ห้ามเงียบ (in-line) + read-back verify:** ทุกการเขียน Shopify (สร้าง order / change size / edit shipping) เช็คผลจริง พังเมื่อไหร่ → push LINE เจ้าของ + เขียน `FAILED` ลง Sheet (คอลัมน์ Shopify Order ID ตอนสร้าง, คอลัมน์ "Sync Status" ตอนแก้). **read-back verify:** หลังแก้ size/ที่อยู่สำเร็จ → อ่านออเดอร์จาก Shopify กลับมาเช็คซ้ำว่าค่า *ลงจริง* (size: new variant active + old variant หาย / ที่อยู่: address1/address2/zip ตรง) ไม่ใช่แค่เชื่อ mutation ตอบ ok — ไม่ตรง = ถือว่า FAILED + LINE. กัน "สำเร็จเงียบแต่ไม่ลง" (`getShopifyOrderSnapshot` ใน webhook size handler + order PUT shipping handler)
