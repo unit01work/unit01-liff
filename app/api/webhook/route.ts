@@ -33,6 +33,7 @@ import {
   alertOwnerOrderFailed,
   alertOwnerEditFailed,
   alertOwnerOrphanPayment,
+  alertOwnerSlipFailure,
 } from "@/lib/order-sync";
 import {
   buildContactFlex,
@@ -325,6 +326,81 @@ function replyInvalidSlip() {
   ];
 }
 
+function replySlipSystemError() {
+  // Shown when verification ITSELF failed (SlipOK/LINE download threw after
+  // retries) — NOT the customer's fault and the slip may be a real payment.
+  // Amber flag + reassurance not to pay again; owner has been alerted in parallel.
+  // Mirrors replyInvalidSlip's Flex structure (text-only, gray Contact button).
+  return [
+    {
+      type: "flex",
+      altText: "[ ! ] CHECKING YOUR PAYMENT",
+      contents: {
+        type: "bubble",
+        body: {
+          type: "box",
+          layout: "vertical",
+          paddingAll: "lg",
+          spacing: "sm",
+          contents: [
+            { type: "text", text: "[ ! ]  CHECKING YOUR PAYMENT", size: "xs", color: "#8A6D2F", weight: "bold" },
+            { type: "text", text: "We're having a brief issue verifying slips right now. Our team has been notified and will confirm your payment shortly — no need to pay again.", size: "sm", color: "#1A1714", wrap: true, margin: "sm" },
+            {
+              type: "box",
+              layout: "vertical",
+              backgroundColor: "#3A3A3A",
+              cornerRadius: "md",
+              paddingAll: "sm",
+              margin: "lg",
+              action: { type: "message", label: "Contact us", text: "contact us" },
+              contents: [
+                { type: "text", text: "Contact us", size: "xs", color: "#FFFFFF", weight: "bold", align: "center" },
+              ],
+            },
+          ],
+        },
+      },
+    },
+  ];
+}
+
+function replyPaymentProcessing() {
+  // Shown when the slip VERIFIED fine but a downstream step (claim/persist/sync)
+  // threw — the money is in, the order just didn't finalize. Reassure the
+  // customer and tell them not to pay again; owner alerted in parallel.
+  return [
+    {
+      type: "flex",
+      altText: "[ ! ] PAYMENT RECEIVED — PROCESSING",
+      contents: {
+        type: "bubble",
+        body: {
+          type: "box",
+          layout: "vertical",
+          paddingAll: "lg",
+          spacing: "sm",
+          contents: [
+            { type: "text", text: "[ ! ]  PAYMENT RECEIVED — PROCESSING", size: "xs", color: "#8A6D2F", weight: "bold" },
+            { type: "text", text: "We've received your payment and are finalizing your order. Our team has been notified and will confirm shortly. Please don't pay again.", size: "sm", color: "#1A1714", wrap: true, margin: "sm" },
+            {
+              type: "box",
+              layout: "vertical",
+              backgroundColor: "#3A3A3A",
+              cornerRadius: "md",
+              paddingAll: "sm",
+              margin: "lg",
+              action: { type: "message", label: "Contact us", text: "contact us" },
+              contents: [
+                { type: "text", text: "Contact us", size: "xs", color: "#FFFFFF", weight: "bold", align: "center" },
+              ],
+            },
+          ],
+        },
+      },
+    },
+  ];
+}
+
 function replyDuplicateSlip() {
   return [
     {
@@ -349,6 +425,13 @@ async function handleSlipImage(
   userId: string,
   silentOnInvalid = false
 ): Promise<any[]> {
+  // ── STEP 1: download + verify (each retried inside lib/slipok) ──
+  // A THROW here is a SYSTEM failure (LINE download / SlipOK non-200 / network)
+  // — NOT an unreadable slip. It must NOT show "couldn't read your slip", because
+  // the customer may well have paid. We alert the owner and tell the customer
+  // we're checking. A clean 200 carrying data.success === false IS a genuinely
+  // unreadable slip and is handled below (replyInvalidSlip), unchanged.
+  let slipResult: Awaited<ReturnType<typeof verifySlip>>;
   try {
     // 1. Download image from LINE
     console.log("[slip] Downloading image:", messageId);
@@ -357,19 +440,32 @@ async function handleSlipImage(
 
     // 2. Verify with SlipOK
     console.log("[slip] Sending to SlipOK...");
-    const slipResult = await verifySlip(imageBuffer);
+    slipResult = await verifySlip(imageBuffer);
     console.log("[slip] SlipOK result:", JSON.stringify(slipResult));
+  } catch (err) {
+    console.error("[slip] Verify step failed (system error):", err);
+    // During a handoff the owner is watching — stay silent, don't interrupt.
+    if (silentOnInvalid) return [];
+    await alertOwnerSlipFailure({ userId, when: nowBKK(), stage: "verify" });
+    return replySlipSystemError();
+  }
 
-    // 3. Check if slip is valid
-    if (!slipResult.success || !slipResult.data?.success) {
-      console.log("[slip] Invalid slip", silentOnInvalid ? "(silent — handoff active)" : "");
-      return silentOnInvalid ? [] : replyInvalidSlip();
-    }
+  // 3. Check if slip is valid (genuinely unreadable / non-slip image — a clean
+  //    200 with data.success === false, distinct from the system error above).
+  if (!slipResult.success || !slipResult.data?.success) {
+    console.log("[slip] Invalid slip", silentOnInvalid ? "(silent — handoff active)" : "");
+    return silentOnInvalid ? [] : replyInvalidSlip();
+  }
 
-    const amount = slipResult.data.amount;
-    const transRef = slipResult.data.transRef;
-    console.log("[slip] Amount:", amount, "TransRef:", transRef);
+  const amount = slipResult.data.amount;
+  const transRef = slipResult.data.transRef;
+  console.log("[slip] Amount:", amount, "TransRef:", transRef);
 
+  // ── STEP 2: process the verified payment ──
+  // The slip is now a CONFIRMED real payment. Any throw from here on means the
+  // money is in but the order didn't finalize — we must NOT say "couldn't read
+  // your slip". Alert the owner and reassure the customer (payment processing).
+  try {
     // 4-6. Atomically: reject duplicate slips, find the NEWEST matching PENDING
     //      order (user + exact amount), and mark it PAID — all inside ONE locked
     //      critical section (claimPaymentForUser → withLock). This closes two
@@ -445,10 +541,14 @@ async function handleSlipImage(
     //    fall back to "now" so the deadline block is always present)
     return replyConfirmPayment(orderId, amount, order["Paid At"] || nowBKK());
   } catch (err) {
-    console.error("[slip] Error processing slip:", err);
-    // During a handoff, stay silent rather than interrupt the human chat with a
-    // "couldn't read your slip" message (the owner is watching and can step in).
-    return silentOnInvalid ? [] : replyInvalidSlip();
+    console.error("[slip] Error processing verified payment:", err);
+    // During a handoff, stay silent rather than interrupt the human chat (the
+    // owner is watching and can step in).
+    if (silentOnInvalid) return [];
+    // The slip already verified — money is in. Never tell the customer we
+    // "couldn't read" it: alert the owner and reassure that we're finalizing.
+    await alertOwnerSlipFailure({ userId, when: nowBKK(), stage: "process", amount, transRef });
+    return replyPaymentProcessing();
   }
 }
 

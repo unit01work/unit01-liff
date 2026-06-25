@@ -76,6 +76,46 @@ export async function pushOwner(text: string): Promise<boolean> {
 }
 
 /**
+ * Push a LINE alert to the shop owner when a slip could NOT be processed by the
+ * system (not the customer's fault). Two stages:
+ *   "verify"  — SlipOK/LINE download failed after retries. The customer may well
+ *               have paid; we just couldn't confirm. Owner must check by hand.
+ *   "process" — slip verified fine, but persisting / creating the order threw.
+ *               Money is in but the order didn't complete. Owner must reconcile.
+ * Never silent: the whole point is that a transient failure no longer ends with
+ * the customer told "couldn't read your slip" and the owner never alerted (root
+ * cause of the 2026-06-25 missed-slip incident).
+ */
+export async function alertOwnerSlipFailure(args: {
+  userId: string;
+  when: string;
+  stage: "verify" | "process";
+  amount?: number;
+  transRef?: string;
+}): Promise<void> {
+  let customerName = "";
+  try {
+    const p = await getLineClient().getProfile(args.userId);
+    customerName = p?.displayName || "";
+  } catch {
+    // profile lookup is best-effort — never block the alert on it
+  }
+  const lines = [
+    "[เตือน] ตรวจสลิปไม่สำเร็จจากระบบ",
+    args.stage === "verify"
+      ? "ระบบยืนยันสลิปไม่ได้ชั่วคราว (ไม่ใช่ความผิดลูกค้า) — ลูกค้าอาจจ่ายเงินแล้ว"
+      : "สลิปตรวจผ่านแล้วแต่บันทึก/สร้างออเดอร์พลาด — เงินเข้าระบบแล้ว ต้องเช็กด่วน",
+    `ลูกค้า LINE: ${args.userId}`,
+    customerName ? `ชื่อ: ${customerName}` : "",
+    args.amount ? `ยอด: ฿${args.amount}` : "",
+    args.transRef ? `Ref: ${args.transRef}` : "",
+    `เวลา: ${args.when}`,
+    "กรุณาเช็ก/ติดต่อลูกค้าด่วน",
+  ].filter(Boolean);
+  await pushOwner(lines.join("\n"));
+}
+
+/**
  * Push a LINE alert to the shop owner when SlipOK verified a real payment but no
  * matching PENDING order was found (e.g. the order already expired before the
  * slip arrived, or the amount didn't match). Money is in but no order — the owner
