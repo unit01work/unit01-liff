@@ -58,7 +58,7 @@ const ORDERS_QUERY = `
           phone
         }
         lineItems(first: 50) {
-          nodes { title quantity variantTitle }
+          nodes { title quantity currentQuantity variantTitle }
         }
         transactions(first: 20) { processedAt status kind }
       }
@@ -92,7 +92,7 @@ interface RawOrderNode {
     zip?: string;
     phone?: string;
   } | null;
-  lineItems: { nodes: { title: string; quantity: number; variantTitle: string | null }[] };
+  lineItems: { nodes: { title: string; quantity: number; currentQuantity: number; variantTitle: string | null }[] };
   transactions: { processedAt: string | null; status: string; kind: string }[];
 }
 
@@ -112,11 +112,15 @@ function paidAtOf(o: RawOrderNode): string {
 
 function mapOrder(o: RawOrderNode): PulledOrder {
   const a = o.shippingAddress || {};
-  const lineItems: PulledLineItem[] = o.lineItems.nodes.map((li) => ({
-    title: li.title,
-    size: li.variantTitle || "",
-    quantity: li.quantity,
-  }));
+  const lineItems: PulledLineItem[] = o.lineItems.nodes
+    // Drop line items removed via Shopify order-edit (currentQuantity 0).
+    // quantity = originally ordered; currentQuantity = after edits.
+    .filter((li) => li.currentQuantity > 0)
+    .map((li) => ({
+      title: li.title,
+      size: li.variantTitle || "",
+      quantity: li.currentQuantity,
+    }));
   const customerName =
     a.name ||
     [a.firstName, a.lastName].filter(Boolean).join(" ").trim();
