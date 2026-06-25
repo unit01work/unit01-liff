@@ -60,6 +60,10 @@ import {
   notifyAdminNewChat,
   notifyAdminNewCustomer,
 } from "@/lib/chat-session";
+import { OWNER_LINE_USER_ID, SHIP_NOTIFY_CODE } from "@/lib/ship-notify/config";
+import { listDaysWithCounts, buildPlanForTab, sendPlanForTab } from "@/lib/ship-notify/run";
+import { buildDayPicker, buildConfirmCard } from "@/lib/ship-notify/confirm-card";
+import { pushAdmin } from "@/lib/daily-pull/notify";
 
 const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}`;
 
@@ -1204,6 +1208,55 @@ export async function POST(request: NextRequest) {
             messages = await handleSelectOrder(postbackOrderId, nextAction);
             break;
           }
+          // ── ship-notify (owner only) ──
+          case "ship_day":
+          case "ship_confirm":
+          case "ship_cancel": {
+            const uid = event.source?.userId || "";
+            if (uid !== OWNER_LINE_USER_ID) {
+              // Not the owner → behave as if the action doesn't exist.
+              messages = [{ type: "text" as const, text: "ไม่พบคำสั่งนี้" }];
+              break;
+            }
+            if (action === "ship_cancel") {
+              messages = [{ type: "text" as const, text: "ยกเลิกแล้ว ไม่มีการส่งหาลูกค้า" }];
+              break;
+            }
+            const tab = params.get("tab") || "";
+            if (action === "ship_day") {
+              // Build the per-order plan preview and show the confirm card.
+              const plan = await buildPlanForTab(tab);
+              messages = [
+                buildConfirmCard({
+                  dateLabel: plan.dateLabel,
+                  tabTitle: plan.tabTitle,
+                  shipments: plan.shipments,
+                  counts: plan.counts,
+                }),
+              ];
+              break;
+            }
+            // action === "ship_confirm": acknowledge instantly, send via push so
+            // the reply token isn't held while we hit Shopify + LINE + Sheets.
+            messages = [{ type: "text" as const, text: "กำลังส่งแจ้งลูกค้า รอสักครู่..." }];
+            after(async () => {
+              try {
+                const r = await sendPlanForTab(tab);
+                const lines: string[] = [`แจ้งส่ง ${r.dateLabel} เสร็จแล้ว`];
+                if (r.sentLine.length) lines.push(`ส่ง LINE สำเร็จ ${r.sentLine.length} ราย: ${r.sentLine.join(", ")}`);
+                if (r.failedLine.length) lines.push(`ส่ง LINE ไม่สำเร็จ ${r.failedLine.length} ราย: ${r.failedLine.join(", ")} (ลองใหม่ได้)`);
+                if (r.sentEmail.length) lines.push(`อีเมล (Shopify) สำเร็จ ${r.sentEmail.length} ราย: ${r.sentEmail.join(", ")}`);
+                if (r.failedEmail.length) lines.push(`อีเมลไม่สำเร็จ ${r.failedEmail.length} ราย: ${r.failedEmail.join(", ")} (ลองใหม่ได้)`);
+                if (r.skippedEmail.length) lines.push(`อีเมลข้าม ${r.skippedEmail.length} ราย: ${r.skippedEmail.join(", ")}`);
+                if (r.skipped.length) lines.push(`ข้าม ${r.skipped.length} ราย: ${r.skipped.join(", ")}`);
+                await pushAdmin(lines.join("\n"));
+              } catch (e) {
+                console.error("[ship-notify] send failed:", e);
+                await pushAdmin("ส่งแจ้งลูกค้าไม่สำเร็จ มีข้อผิดพลาด ลองใหม่อีกครั้ง");
+              }
+            });
+            break;
+          }
           default:
             messages = [{ type: "text" as const, text: "Unknown action." }];
         }
@@ -1244,6 +1297,30 @@ export async function POST(request: NextRequest) {
 
       // ── Message events ──
       if (event.type !== "message") continue;
+
+      // ── ship-notify trigger (owner only) ──
+      // The owner types the exact secret code from their own LINE to open the
+      // ship-notify day picker. Gated on userId first (real guard) + exact code
+      // (second layer) so customer chat can never trigger it. Handled BEFORE the
+      // handoff/session gate so it works in any session state.
+      if (
+        event.message.type === "text" &&
+        event.source?.userId === OWNER_LINE_USER_ID &&
+        event.message.text.trim() === SHIP_NOTIFY_CODE
+      ) {
+        try {
+          const days = await listDaysWithCounts();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await client.replyMessage({ replyToken, messages: [buildDayPicker(days) as any] });
+        } catch (e) {
+          console.error("[ship-notify] day picker failed:", e);
+          await client.replyMessage({
+            replyToken,
+            messages: [{ type: "text", text: "เปิดเมนูแจ้งส่งไม่สำเร็จ ลองใหม่อีกครั้ง" }],
+          });
+        }
+        continue;
+      }
 
       // ── Handoff / pause gate ── (ONE Sheets read decides everything)
       // status meanings (lib/chat-session.ts):
