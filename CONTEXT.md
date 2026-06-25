@@ -156,7 +156,9 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 ---
 
 ## Edit-Lock — เดดไลน์แก้ออเดอร์ราย order (เสร็จแล้ว — merge + ขึ้น production แล้ว 2026-06-13)
-ลูกค้าแก้ที่อยู่/ไซส์ได้ถึง **10:00 น. (ICT)** ของวัน cutoff เท่านั้น เลยเวลานี้ออเดอร์ "กำลังเตรียมจัดส่ง" → ล็อก. ไฟล์เดียวจบ: **`lib/edit-lock.ts`** (ไม่มี cron, ไม่มี background job)
+> ⚠️ **เวลา cutoff เป็นค่ากลางที่ `lib/config.ts` (`CUTOFF_HOUR`) แล้ว — ปัจจุบัน 18:00 ICT** (ย้ายจาก 10:00 → 18:00 เมื่อ 2026-06-25, commit `3ad0e22`). ตัวเลข "10:00" ที่เขียนในหัวข้อนี้ด้านล่างเป็นตัวอย่างประวัติศาสตร์ — ค่าจริงอ่านจาก `CUTOFF_TIME`. **ครั้งหน้าแก้เวลา = แก้บรรทัดเดียวที่ `lib/config.ts` + ขยับ cron 4 ตัวที่ cron-job.org ให้ตรง** (daily-pull = cutoff+10น., heartbeat = cutoff+30น., reconcile/scope-check = cutoff−1ชม.).
+
+ลูกค้าแก้ที่อยู่/ไซส์ได้ถึงเวลา cutoff (ICT, ดู `CUTOFF_TIME`) ของวัน cutoff เท่านั้น เลยเวลานี้ออเดอร์ "กำลังเตรียมจัดส่ง" → ล็อก. ไฟล์เดียวจบ: **`lib/edit-lock.ts`** (ไม่มี cron, ไม่มี background job; ค่าเวลา import จาก `lib/config.ts`)
 - **check-on-press:** คำนวณเดดไลน์ใหม่ทุกครั้งที่ลูกค้ากดแก้ (เหมือนคูปองหมดอายุ) — ไม่มีงานเบื้องหลังคอยปลดล็อก
 - **กฎเดดไลน์ (คิดจาก "Paid At"):** `cutoffToday = <วันที่จ่าย> 10:00` · จ่าย ≤ 10:00 → เดดไลน์ = วันนั้น 10:00 · จ่าย > 10:00 → เดดไลน์ = วันถัดไป 10:00
 - **เทียบเวลาแบบ string ตายตัว** "YYYY-MM-DD HH:MM" (Bangkok-local, mirror `nowBKK` ใน lib/sheets) — string ความกว้างคงที่เรียงตามเวลาได้ จึงเทียบ lexicographic ตรงๆ **ไม่แตะ UTC** กัน off-by-one
@@ -299,10 +301,10 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 4. **Smoke test ก่อนขาย:** (ยังไม่ทำเป็นสคริปต์ถาวร — รันทดสอบ manual)
 - **cron บน cron-job.org (ตั้งแล้ว ✅):** บัญชี cron-job.org มี 5 งาน:
   - `UNIT-01 auto-cancel orders` → `/api/check-expired` ทุก 1 นาที
-  - `UNIT-01 reconcile (Sheet↔Shopify)` → `/api/reconcile?key=<CRON_SECRET>` ทุกวัน 09:00 (Asia/Bangkok, crontab `0 9 * * *`)
-  - `UNIT-01 scope-check (Shopify)` → `/api/scope-check?key=<CRON_SECRET>` ทุกวัน 09:00 (Asia/Bangkok, crontab `0 9 * * *`)
-  - `UNIT-01 daily pull` (jobId 7799747) → `/api/daily-pull?key=<CRON_SECRET>` ทุกวัน **10:10** (Asia/Bangkok) — เลื่อนจาก 10:00 → 10:10 เพื่อให้ดึง worklist **หลัง** edit-lock cutoff (10:00) ลูกค้าแก้ที่อยู่/ไซส์ได้จนถึง 10:00 พอดึงตอน 10:10 จะได้ข้อมูลที่นิ่งแล้ว (window cutoff ของข้อมูลยังเป็น 10:00 เป๊ะ)
-  - `UNIT-01 heartbeat` (jobId 7799750) → `/api/daily-pull-heartbeat?key=<CRON_SECRET>` ทุกวัน 10:30 (Asia/Bangkok)
+  - `UNIT-01 reconcile (Sheet↔Shopify)` → `/api/reconcile?key=<CRON_SECRET>` ทุกวัน **17:00** (Asia/Bangkok, crontab `0 17 * * *`) — ขยับจาก 09:00 ให้มาก่อน cutoff 18:00 หนึ่งชั่วโมง (เหมือนเดิมที่ 09:00 มาก่อน 10:00)
+  - `UNIT-01 scope-check (Shopify)` → `/api/scope-check?key=<CRON_SECRET>` ทุกวัน **17:00** (Asia/Bangkok, crontab `0 17 * * *`)
+  - `UNIT-01 daily pull` (jobId 7799747) → `/api/daily-pull?key=<CRON_SECRET>` ทุกวัน **18:10** (Asia/Bangkok) — เลื่อนจาก 10:10 → 18:10 ตอนย้าย cutoff 10:00 → 18:00 (2026-06-25). ยิงหลัง cutoff 18:00 สิบนาทีเพื่อให้ดึง worklist **หลัง** edit-lock cutoff (ข้อมูลที่อยู่/ไซส์นิ่งแล้ว; window cutoff ของข้อมูลคุมด้วย `CUTOFF_HOUR` ใน `lib/config.ts` = 18 เป๊ะ)
+  - `UNIT-01 heartbeat` (jobId 7799750) → `/api/daily-pull-heartbeat?key=<CRON_SECRET>` ทุกวัน **18:30** (Asia/Bangkok)
   - helper `pushOwner` ใน `lib/order-sync.ts` ใช้ส่ง LINE หาเจ้าของ — ถ้าได้ LINE เตือน = มีออเดอร์ที่ Sheet กับ Shopify ไม่ตรง ต้องไปแก้มือใน Shopify
   - ยืนยัน endpoint บน production แล้ว: scope-check `ok:true` (scope ครบ), reconcile จับ `#UT-8DW9TX` (ออเดอร์เทสต์ จ่ายแล้วไม่มี Shopify ID) ได้ถูกต้อง
 
@@ -310,9 +312,9 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 
 ## Daily Pull Worklist (เสร็จแล้ว — merge + ขึ้น production แล้ว 2026-06-12)
 ระบบดึงออเดอร์ประจำวันลงชีตเป็นรายการแพ็คของ (worklist) — โมดูลแยกตัวเอง (`app/api/daily-pull*`, `lib/daily-pull/*`) **ไม่ import core lib** (sheets/shopify ของ sales loop) เพื่อให้ลบทั้งก้อนได้ ไม่กระทบระบบขาย
-- **`GET/POST /api/daily-pull`** (auth CRON_SECRET): ทุกวัน 10:00 ICT ดึงออเดอร์ **PAID + UNFULFILLED** ในหน้าต่าง 24 ชม. (เมื่อวาน 10:00 → วันนี้ 10:00, ตัดที่ 10:00:00 เป๊ะตาม paid timestamp) → เขียนแท็บใหม่ต่อวันในชีตเดิม "UNIT-01 Orders" (ชื่อแท็บ `WL-YYYY-MM-DD`, 11 คอลัมน์ไทย) → reconcile เทียบ re-pull → tag `worklisted` กันดึงซ้ำ → แจ้ง carry-over แยก → รายงานทุกสเตปเป็นไทยทาง LINE (ไม่มี emoji)
-- **`GET /api/daily-pull-heartbeat`** (auth CRON_SECRET): 10:30 ICT เช็คว่าแท็บ `WL-วันนี้` มีไหม — ไม่มี = รอบ 10:00 ไม่ทำงาน → push LINE เตือนด่วน. แท็บว่าง (0 ออเดอร์) ยังนับว่า "ทำงานแล้ว" → วันเงียบไม่ false-alarm
-- **window logic** (`lib/daily-pull/window.ts`): CUTOFF_HOUR=10 ICT (=03:00 UTC), `isInWindow`/`isCarryOver`. paidAt = transaction SUCCESS SALE/CAPTURE processedAt ตัวแรกสุด (fallback createdAt)
+- **`GET/POST /api/daily-pull`** (auth CRON_SECRET): ทุกวัน cutoff ICT (= `CUTOFF_HOUR` ใน `lib/config.ts`, ปัจจุบัน **18:00**) ดึงออเดอร์ **PAID + UNFULFILLED** ในหน้าต่าง 24 ชม. (เมื่อวาน 18:00 → วันนี้ 18:00, ตัดที่ 18:00:00 เป๊ะตาม paid timestamp) → เขียนแท็บใหม่ต่อวันในชีตเดิม "UNIT-01 Orders" (ชื่อแท็บ `WL-YYYY-MM-DD`, 11 คอลัมน์ไทย) → reconcile เทียบ re-pull → tag `worklisted` กันดึงซ้ำ → แจ้ง carry-over แยก → รายงานทุกสเตปเป็นไทยทาง LINE (ไม่มี emoji)
+- **`GET /api/daily-pull-heartbeat`** (auth CRON_SECRET): 18:30 ICT เช็คว่าแท็บ `WL-วันนี้` มีไหม — ไม่มี = รอบ 18:00 ไม่ทำงาน → push LINE เตือนด่วน (ข้อความใช้ `CUTOFF_TIME`). แท็บว่าง (0 ออเดอร์) ยังนับว่า "ทำงานแล้ว" → วันเงียบไม่ false-alarm
+- **window logic** (`lib/daily-pull/window.ts`): `CUTOFF_HOUR`/`CUTOFF_MINUTE` import จาก `lib/config.ts` (ปัจจุบัน 18:00 ICT = 11:00 UTC), `isInWindow`/`isCarryOver`. paidAt = transaction SUCCESS SALE/CAPTURE processedAt ตัวแรกสุด (fallback createdAt)
 - **idempotency:** tag `worklisted` ผ่าน `tagsAdd` — รอบถัดไปดึงด้วย `-tag:worklisted` ไม่ดึงซ้ำ (Shopify search index มี lag หลัง tag นิดหน่อย). **regen** (เรียกซ้ำด้วย `?date=`) ดึงทุกอันรวมที่ tag แล้ว + เขียนทับแท็บเดิม (stable gid)
 - **reconcile/verify ต้อง mirror การ exclude worklisted ของ pull หลัก** (`excludeWorklisted: !isRegen`) — ไม่งั้นออเดอร์ที่ tag แล้วจะถูก re-pull, ถูกมองว่า "หาย", แล้ว auto-fix เอากลับเข้าชีต (บั๊กนี้แก้แล้ว commit e933a52)
 - ตั้ง cron 2 งานบน cron-job.org แล้ว (ดู Monitoring/Guards). ตัวแปร LINE ปลายทาง: `ADMIN_LINE_USER_ID` (fallback `OWNER_LINE_USER_ID`)
