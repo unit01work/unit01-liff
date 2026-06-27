@@ -13,7 +13,17 @@ import { ictParts } from "./window";
  *   "+1 949-813-7942" → "+19498137942"
  *   "0815459999"      → "+66815459999"   (Thai local → add +66, drop the 0)
  *   "66815459999"     → "+66815459999"   (Thai cc without +)
- *   "19498137942"     → "+19498137942"   (US cc without +)
+ *   "19498137942"     → "+19498137942"   (US cc 1 + 10 digits, missing +)
+ *   "7062316620"      → "+17062316620"   (US/Canada 10-digit national, no cc)
+ *   "(706) 231-6620"  → "+17062316620"   (same, with separators)
+ *
+ * The 10-digit NANP case matters: Shopify returns US shipping phones as a bare
+ * national number ("7062316620"). Without this branch it fell through to the
+ * generic `"+" + digits` and became "+7062316620" — which reads as country code
+ * +7 (Russia/Kazakhstan), an un-shippable number on the packing worklist. Thai
+ * numbers never hit this branch (local form starts with 0 → +66 above; E.164
+ * form starts with +). A bare 10-digit number with no leading 0 is therefore a
+ * North-American national number → prefix +1.
  */
 export function toDisplayPhone(raw: string): string {
   if (!raw) return "";
@@ -25,7 +35,8 @@ export function toDisplayPhone(raw: string): string {
   if (d.startsWith("00")) return "+" + d.slice(2); // intl prefix → +
   if (d.startsWith("0")) return "+66" + d.slice(1); // Thai local → +66
   if (d.startsWith("66")) return "+" + d; // Thai cc, missing +
-  if (d.length === 11 && d.startsWith("1")) return "+" + d; // US cc, missing +
+  if (d.length === 11 && d.startsWith("1")) return "+" + d; // US cc 1 + 10 digits
+  if (d.length === 10) return "+1" + d; // US/Canada 10-digit national → +1
   return "+" + d; // assume it already carries a country code
 }
 
@@ -81,7 +92,10 @@ export function rowToValues(r: WorklistRow): Record<string, string | number> {
   return {
     [WORKLIST_HEADERS[0]]: r.orderName,
     [WORKLIST_HEADERS[1]]: r.date,
-    [WORKLIST_HEADERS[2]]: r.time,
+    // Leading apostrophe forces text, else Sheets coerces "09:38" to a time value
+    // and re-renders it as "9:38" (single-digit hour) — keep the zero-pad. The
+    // apostrophe itself is not displayed.
+    [WORKLIST_HEADERS[2]]: r.time ? `'${r.time}` : "",
     [WORKLIST_HEADERS[3]]: r.country,
     [WORKLIST_HEADERS[4]]: r.customer,
     [WORKLIST_HEADERS[5]]: r.address,
