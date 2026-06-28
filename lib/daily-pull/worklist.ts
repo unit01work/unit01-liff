@@ -99,7 +99,11 @@ export function rowToValues(r: WorklistRow): Record<string, string | number> {
     [WORKLIST_HEADERS[3]]: r.country,
     [WORKLIST_HEADERS[4]]: r.customer,
     [WORKLIST_HEADERS[5]]: r.address,
-    [WORKLIST_HEADERS[6]]: r.zip,
+    // Leading apostrophe forces text, else Sheets coerces a numeric ZIP into a
+    // number and strips the leading zero (US "02721" → "2721"), so the worklist
+    // no longer matches Shopify. Thai 5-digit codes are unaffected but kept as
+    // text too. The apostrophe itself is not displayed.
+    [WORKLIST_HEADERS[6]]: r.zip ? `'${r.zip}` : "",
     // Leading apostrophe forces Google Sheets (USER_ENTERED) to store the value
     // as text, so the "+" and any leading zero survive instead of being coerced
     // into a number. The apostrophe itself is not displayed.
