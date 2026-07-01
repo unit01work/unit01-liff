@@ -39,3 +39,15 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Claude Code session data
+.claude/
+
+# credential / service-account keys — never commit any root .json.
+# (a leaked GCP service-account key once sat here; make it impossible again.)
+# Real secrets live in .env.local; the four below are the only root .json we track.
+/*.json
+!/package.json
+!/package-lock.json
+!/tsconfig.json
+!/vercel.json
