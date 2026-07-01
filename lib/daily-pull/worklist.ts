@@ -1,42 +1,55 @@
+import { parsePhoneNumberFromString } from "libphonenumber-js/max";
+import type { CountryCode } from "libphonenumber-js";
 import type { PulledOrder, WorklistRow } from "./types";
 import { ictParts } from "./window";
 
 /**
  * Normalise a phone number to E.164 with an explicit leading "+" and country
  * code, so the packing worklist is unambiguous (e.g. "+66815459999",
- * "+19498137942"). Shopify usually returns E.164 already, but some older orders
- * carry a Thai-local value ("081..."), and either way Google Sheets would coerce
- * a "+66..." string into a number and strip the "+" (and any leading zero). We
- * normalise here and the caller writes the value as text (see rowToValues).
+ * "+19498137942", "+525639630778"). Shopify usually returns E.164 already, but
+ * some orders carry a bare national number ("081...", "5639630778"), and either
+ * way Google Sheets would coerce a "+66..." string into a number and strip the
+ * "+" (and any leading zero). We normalise here and the caller writes the value
+ * as text (see rowToValues).
  *
- *   "+66 81 545 9999" → "+66815459999"   (already E.164, just compacted)
- *   "+1 949-813-7942" → "+19498137942"
- *   "0815459999"      → "+66815459999"   (Thai local → add +66, drop the 0)
- *   "66815459999"     → "+66815459999"   (Thai cc without +)
- *   "19498137942"     → "+19498137942"   (US cc 1 + 10 digits, missing +)
- *   "7062316620"      → "+17062316620"   (US/Canada 10-digit national, no cc)
- *   "(706) 231-6620"  → "+17062316620"   (same, with separators)
+ * Parsing is delegated to libphonenumber-js, which knows the numbering plan of
+ * every country — so we never have to hardcode dial codes or guess from the
+ * digit count again. `countryCode` is Shopify's shippingAddress.countryCodeV2
+ * ("TH", "US", "MX", …); it tells the library how to interpret a bare national
+ * number. This is the fix for the bug where a 10-digit Mexican number
+ * ("5639630778") was guessed as North-American → "+15639630778" instead of
+ * "+525639630778": a digit count can't tell MX from US, but the country can.
+ * The library also handles country-specific quirks a simple dial-code map
+ * cannot (e.g. Italian landlines keep their leading 0 in E.164).
  *
- * The 10-digit NANP case matters: Shopify returns US shipping phones as a bare
- * national number ("7062316620"). Without this branch it fell through to the
- * generic `"+" + digits` and became "+7062316620" — which reads as country code
- * +7 (Russia/Kazakhstan), an un-shippable number on the packing worklist. Thai
- * numbers never hit this branch (local form starts with 0 → +66 above; E.164
- * form starts with +). A bare 10-digit number with no leading 0 is therefore a
- * North-American national number → prefix +1.
+ *   "+66 81 545 9999" (TH) → "+66815459999"  (already E.164, just compacted)
+ *   "0815459999"      (TH) → "+66815459999"  (national w/ trunk 0 → +66)
+ *   "7062316620"      (US) → "+17062316620"  (bare national → +1)
+ *   "5639630778"      (MX) → "+525639630778" (bare national → +52)
+ *
+ * If the library can't parse the value (garbage/partial data, or a bare
+ * national number with no country code to anchor it), we fall back to a
+ * best-effort normalisation so the worklist still shows something usable.
  */
-export function toDisplayPhone(raw: string): string {
+export function toDisplayPhone(raw: string, countryCode?: string): string {
   if (!raw) return "";
   const trimmed = raw.trim();
-  // Already E.164: keep the "+", strip separators from the rest.
+
+  // A "+"-prefixed value is already international; otherwise hand the library
+  // the Shopify country code so a bare national number resolves correctly.
+  const cc = trimmed.startsWith("+")
+    ? undefined
+    : (countryCode?.toUpperCase() as CountryCode | undefined);
+  const parsed = parsePhoneNumberFromString(trimmed, cc);
+  if (parsed) return parsed.number; // E.164, e.g. "+525639630778"
+
+  // Fallback — library couldn't parse it. Best-effort E.164.
   if (trimmed.startsWith("+")) return "+" + trimmed.slice(1).replace(/\D/g, "");
   const d = trimmed.replace(/\D/g, "");
   if (!d) return "";
   if (d.startsWith("00")) return "+" + d.slice(2); // intl prefix → +
-  if (d.startsWith("0")) return "+66" + d.slice(1); // Thai local → +66
+  if (d.startsWith("0")) return "+66" + d.replace(/^0+/, ""); // assume Thai local
   if (d.startsWith("66")) return "+" + d; // Thai cc, missing +
-  if (d.length === 11 && d.startsWith("1")) return "+" + d; // US cc 1 + 10 digits
-  if (d.length === 10) return "+1" + d; // US/Canada 10-digit national → +1
   return "+" + d; // assume it already carries a country code
 }
 
@@ -66,7 +79,7 @@ export function toWorklistRow(o: PulledOrder): WorklistRow {
     customer: o.customerName,
     address,
     zip: o.zip,
-    phone: toDisplayPhone(o.phone),
+    phone: toDisplayPhone(o.phone, o.countryCode),
     products,
     qty,
     sizes,

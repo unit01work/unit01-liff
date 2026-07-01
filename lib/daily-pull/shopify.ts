@@ -54,6 +54,7 @@ const ORDERS_QUERY = `
           city
           province
           country
+          countryCodeV2
           zip
           phone
         }
@@ -89,6 +90,7 @@ interface RawOrderNode {
     city?: string;
     province?: string;
     country?: string;
+    countryCodeV2?: string; // ISO 3166-1 alpha-2, e.g. "TH", "US", "MX"
     zip?: string;
     phone?: string;
   } | null;
@@ -132,6 +134,7 @@ function mapOrder(o: RawOrderNode): PulledOrder {
     tags: o.tags || [],
     customerName,
     country: a.country || "",
+    countryCode: a.countryCodeV2 || "",
     address1: a.address1 || "",
     address2: a.address2 || "",
     city: a.city || "",

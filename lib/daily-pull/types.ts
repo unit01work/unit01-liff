@@ -15,7 +15,8 @@ export interface PulledOrder {
   paidAt: string; // ISO UTC — payment processedAt (fallback createdAt)
   tags: string[];
   customerName: string;
-  country: string;
+  country: string; // display name, e.g. "Mexico"
+  countryCode: string; // ISO 3166-1 alpha-2, e.g. "MX" — used to pick dial code
   address1: string;
   address2: string;
   city: string;
