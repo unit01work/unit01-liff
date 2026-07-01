@@ -1048,6 +1048,64 @@ export async function appendOrphanPayment(entry: OrphanPaymentEntry): Promise<vo
   }
 }
 
+const SLIP_LOG_HEADERS = [
+  "At", "Mode", "Stage", "Outcome", "Amount", "Slip Ref",
+  "Order ID", "LINE User ID", "Message ID", "Detail",
+];
+
+export interface SlipLogEntry {
+  /** "active" | "standby" — the LINE delivery mode the slip event arrived in. */
+  mode: string;
+  /**
+   * How far the slip got / where it stopped:
+   *   download_error | slipok_error | invalid | duplicate | orphan |
+   *   self_heal | paid | process_error
+   */
+  stage: string;
+  /** "ok" (finalised paid) | "fail" (money maybe in but not finalised) | "info". */
+  outcome: string;
+  userId: string;
+  messageId?: string;
+  amount?: string | number;
+  transRef?: string;
+  orderId?: string;
+  /** Short note / error message — the forensic breadcrumb. */
+  detail?: string;
+}
+
+/**
+ * Append ONE row to the "Slip Log" tab for every slip the webhook processes —
+ * the persistent forensic trail. Its whole reason to exist: when a payment is
+ * ever lost again (most dangerously during LINE native manual chat / standby,
+ * where LINE's own event delivery is best-effort), we can open this tab and see
+ * EXACTLY how far the slip got and where it stopped — did the standby event even
+ * arrive, did the image download, did SlipOK verify, did it match an order — so
+ * we stop GUESSING between "event never arrived" and "verify failed". Records the
+ * delivery mode so an active-vs-standby failure is distinguishable at a glance.
+ * Best-effort: never throws, never blocks the slip path.
+ */
+export async function logSlipEvent(entry: SlipLogEntry): Promise<void> {
+  try {
+    const doc = getDoc();
+    await doc.loadInfo();
+    const sheet = await getOrCreateTab(doc, "Slip Log", SLIP_LOG_HEADERS);
+    await sheet.addRow({
+      "At": nowBKK(),
+      "Mode": entry.mode,
+      "Stage": entry.stage,
+      "Outcome": entry.outcome,
+      "Amount": entry.amount ?? "",
+      "Slip Ref": entry.transRef || "",
+      "Order ID": entry.orderId || "",
+      "LINE User ID": entry.userId || "",
+      "Message ID": entry.messageId || "",
+      "Detail": entry.detail || "",
+    });
+  } catch (err) {
+    console.error("[sheets] logSlipEvent failed:", err);
+  }
+}
+
 /** Append a Stock Log row for every line item of an order. */
 export async function logOrderStockMovement(
   order: OrderRow,
@@ -1447,6 +1505,8 @@ export interface ClaimPaymentResult {
   ok: boolean;
   reason?: ClaimReason;
   order?: OrderRow;
+  /** true when a genuine late slip revived a recently-EXPIRED order (self-heal). */
+  selfHealed?: boolean;
 }
 
 /**
@@ -1580,7 +1640,7 @@ export async function claimPaymentForUser(
       }
       console.log("[claimPayment] Self-heal: reviving recently-EXPIRED order", row.get("Order ID"));
       const order = await markRowPaidAndCommit(doc, row, transRef, nowBKK());
-      return { ok: true, order };
+      return { ok: true, order, selfHealed: true };
     }
 
     return { ok: false, reason: "no_match" };

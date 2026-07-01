@@ -20,6 +20,7 @@ import {
   logOrderStockMovement,
   appendOrphanPayment,
   recoverOrderToPaid,
+  logSlipEvent,
 } from "@/lib/sheets";
 import {
   getShopifyOrderStatus,
@@ -428,7 +429,8 @@ function replyDuplicateSlip() {
 async function handleSlipImage(
   messageId: string,
   userId: string,
-  silentOnInvalid = false
+  silentOnInvalid = false,
+  mode: "active" | "standby" = "active"
 ): Promise<any[]> {
   // ── STEP 1: download + verify (each retried inside lib/slipok) ──
   // A THROW here is a SYSTEM failure (LINE download / SlipOK non-200 / network)
@@ -436,6 +438,12 @@ async function handleSlipImage(
   // the customer may well have paid. We alert the owner and tell the customer
   // we're checking. A clean 200 carrying data.success === false IS a genuinely
   // unreadable slip and is handled below (replyInvalidSlip), unchanged.
+  //
+  // `subStep` tracks which half of STEP 1 we're in so the forensic Slip Log can
+  // say whether the IMAGE DOWNLOAD failed (LINE didn't hand us the content — the
+  // classic standby symptom) vs SlipOK verification failed. That distinction is
+  // exactly what we've been guessing at when a payment goes missing.
+  let subStep: "download" | "slipok" = "download";
   let slipResult: Awaited<ReturnType<typeof verifySlip>>;
   try {
     // 1. Download image from LINE
@@ -444,11 +452,18 @@ async function handleSlipImage(
     console.log("[slip] Image size:", imageBuffer.length);
 
     // 2. Verify with SlipOK
+    subStep = "slipok";
     console.log("[slip] Sending to SlipOK...");
     slipResult = await verifySlip(imageBuffer);
     console.log("[slip] SlipOK result:", JSON.stringify(slipResult));
   } catch (err) {
     console.error("[slip] Verify step failed (system error):", err);
+    await logSlipEvent({
+      mode, userId, messageId,
+      stage: subStep === "download" ? "download_error" : "slipok_error",
+      outcome: "fail",
+      detail: err instanceof Error ? err.message : String(err),
+    });
     // A system error means the customer may well have paid but we couldn't
     // confirm it — ALWAYS alert the owner, even in silent/standby mode (LINE
     // native manual chat). "Silent" only suppresses the customer-facing reply so
@@ -463,6 +478,7 @@ async function handleSlipImage(
   //    200 with data.success === false, distinct from the system error above).
   if (!slipResult.success || !slipResult.data?.success) {
     console.log("[slip] Invalid slip", silentOnInvalid ? "(silent — handoff active)" : "");
+    await logSlipEvent({ mode, userId, messageId, stage: "invalid", outcome: "info" });
     return silentOnInvalid ? [] : replyInvalidSlip();
   }
 
@@ -484,6 +500,7 @@ async function handleSlipImage(
     if (!claim.ok) {
       if (claim.reason === "duplicate") {
         console.log("[slip] Duplicate transRef:", transRef);
+        await logSlipEvent({ mode, userId, messageId, stage: "duplicate", outcome: "info", amount, transRef });
         return replyDuplicateSlip();
       }
       // SlipOK already verified this is a REAL payment (we're past the validity
@@ -517,11 +534,18 @@ async function handleSlipImage(
         slipDateTime,
         customerName,
       });
+      await logSlipEvent({ mode, userId, messageId, stage: "orphan", outcome: "fail", amount, transRef, detail: "verified slip, no matching order" });
       return replyNoMatchingOrder(amount);
     }
     const order = claim.order!;
     const orderId = order["Order ID"];
     console.log("[slip] Claimed + marked PAID:", orderId);
+    await logSlipEvent({
+      mode, userId, messageId,
+      stage: claim.selfHealed ? "self_heal" : "paid",
+      outcome: "ok", amount, transRef, orderId,
+      detail: claim.selfHealed ? "revived recently-EXPIRED order" : "",
+    });
 
     // Stock Log: SOLD (reserved stock is now a confirmed sale — no extra deduction)
     await logOrderStockMovement(order, "SOLD", 0, "จ่ายเงินแล้ว ขายสำเร็จ");
@@ -551,6 +575,11 @@ async function handleSlipImage(
     return replyConfirmPayment(orderId, amount, order["Paid At"] || nowBKK());
   } catch (err) {
     console.error("[slip] Error processing verified payment:", err);
+    await logSlipEvent({
+      mode, userId, messageId, stage: "process_error", outcome: "fail",
+      amount, transRef,
+      detail: err instanceof Error ? err.message : String(err),
+    });
     // The slip already verified — money IS in. ALWAYS alert the owner, even in
     // silent/standby mode: a verified payment that failed to finalize must never
     // be lost unnoticed. "Silent" only suppresses the customer reply so we don't
@@ -1188,7 +1217,7 @@ export async function POST(request: NextRequest) {
           // Off the hot path so LINE still gets a fast 200 (SlipOK + Shopify are slow).
           after(async () => {
             try {
-              const sbMsgs = await handleSlipImage(sbMessageId, sbUserId, true);
+              const sbMsgs = await handleSlipImage(sbMessageId, sbUserId, true, "standby");
               if (sbMsgs && sbMsgs.length > 0 && sbUserId) {
                 await getLineClient()
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
