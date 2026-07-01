@@ -13,7 +13,6 @@ import {
   setOrderSyncStatus,
   updateOrderSize,
   parseOrderItems,
-  findLatestOrderByUser,
   findActiveOrders,
   findExpiredOrders,
   ORDER_EXPIRE_MINUTES,
@@ -24,7 +23,6 @@ import {
 } from "@/lib/sheets";
 import {
   getShopifyOrderStatus,
-  getProductVariants,
   getProductSizeChart,
   isOrderUnfulfilled,
   updateShopifyOrderVariant,
