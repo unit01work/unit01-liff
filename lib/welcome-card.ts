@@ -104,20 +104,3 @@ export function buildWelcomeCard(displayName: string) {
     },
   };
 }
-
-/**
- * Product-feature images sent to a new friend right after the welcome card.
- * Two DUALFLOW™ performance-fabric infographics (front feature breakdown +
- * back BASE-01 reflective / run-number). Hosted alongside the card assets in
- * `public/welcome/`. LINE image messages need an HTTPS original + a smaller
- * preview thumbnail; both are pre-sized JPEGs (original ≤4096px / ≤10MB,
- * preview ≤1MB) so LINE renders them reliably.
- */
-export function buildWelcomeImages() {
-  const img = (file: string) => ({
-    type: "image" as const,
-    originalContentUrl: `${ASSET_BASE}/${file}.jpg`,
-    previewImageUrl: `${ASSET_BASE}/${file}-preview.jpg`,
-  });
-  return [img("feature-06"), img("feature-07")];
-}

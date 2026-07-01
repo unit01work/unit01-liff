@@ -3,7 +3,7 @@ import { after } from "next/server";
 import { revalidateTag } from "next/cache";
 import { validateSignature } from "@line/bot-sdk";
 import { getLineClient } from "@/lib/line";
-import { buildWelcomeCard, buildWelcomeImages } from "@/lib/welcome-card";
+import { buildWelcomeCard } from "@/lib/welcome-card";
 import { PRODUCTS_CACHE_TAG } from "@/lib/products";
 import { downloadLineImage, verifySlip } from "@/lib/slipok";
 import {
@@ -1286,12 +1286,9 @@ export async function POST(request: NextRequest) {
         }
         try {
           const welcome = buildWelcomeCard(displayName);
-          // Welcome card first, then the two product-feature images. One reply
-          // call carries up to 5 messages — here 3 (card + 2 images).
-          const messages = [welcome, ...buildWelcomeImages()];
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await client.replyMessage({ replyToken, messages: messages as any });
-          console.log(`Sent welcome card + ${buildWelcomeImages().length} images to follow: ${followUserId}`);
+          await client.replyMessage({ replyToken, messages: [welcome as any] });
+          console.log(`Sent welcome card to follow: ${followUserId}`);
         } catch (welcomeErr) {
           console.error("Follow welcome reply failed:", welcomeErr);
         }
