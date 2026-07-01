@@ -19,6 +19,7 @@ import {
   ORDER_EXPIRE_MINUTES,
   logOrderStockMovement,
   appendOrphanPayment,
+  recoverOrderToPaid,
 } from "@/lib/sheets";
 import {
   getShopifyOrderStatus,
@@ -448,9 +449,13 @@ async function handleSlipImage(
     console.log("[slip] SlipOK result:", JSON.stringify(slipResult));
   } catch (err) {
     console.error("[slip] Verify step failed (system error):", err);
-    // During a handoff the owner is watching — stay silent, don't interrupt.
-    if (silentOnInvalid) return [];
+    // A system error means the customer may well have paid but we couldn't
+    // confirm it — ALWAYS alert the owner, even in silent/standby mode (LINE
+    // native manual chat). "Silent" only suppresses the customer-facing reply so
+    // we don't interrupt the live human chat; it must NOT hide a possible lost
+    // payment from the owner (that silent hole is exactly how slips went missing).
     await alertOwnerSlipFailure({ userId, when: nowBKK(), stage: "verify" });
+    if (silentOnInvalid) return [];
     return replySlipSystemError();
   }
 
@@ -546,14 +551,95 @@ async function handleSlipImage(
     return replyConfirmPayment(orderId, amount, order["Paid At"] || nowBKK());
   } catch (err) {
     console.error("[slip] Error processing verified payment:", err);
-    // During a handoff, stay silent rather than interrupt the human chat (the
-    // owner is watching and can step in).
-    if (silentOnInvalid) return [];
-    // The slip already verified — money is in. Never tell the customer we
-    // "couldn't read" it: alert the owner and reassure that we're finalizing.
+    // The slip already verified — money IS in. ALWAYS alert the owner, even in
+    // silent/standby mode: a verified payment that failed to finalize must never
+    // be lost unnoticed. "Silent" only suppresses the customer reply so we don't
+    // interrupt the live human chat — never the owner notification.
     await alertOwnerSlipFailure({ userId, when: nowBKK(), stage: "process", amount, transRef });
+    if (silentOnInvalid) return [];
+    // Never tell the customer we "couldn't read" it — reassure we're finalizing.
     return replyPaymentProcessing();
   }
+}
+
+/**
+ * Owner tapped "✅ ลูกค้าจ่ายแล้ว — กู้ออเดอร์" on an auto-cancel alert. Force the
+ * order to PAID (owner authority — no LINE slip re-delivery needed), then finish
+ * exactly like a real paid slip: create the Shopify order, log the sale, refresh
+ * availability, and confirm to the customer. Idempotent: a double tap on an
+ * already-paid order changes nothing. Returns the owner's reply message(s).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleRecoverOrder(orderId: string): Promise<any[]> {
+  if (!orderId) return [{ type: "text", text: "ไม่พบเลขออเดอร์ในปุ่มนี้" }];
+  const displayId = orderId.startsWith("#") ? orderId : `#${orderId}`;
+
+  let result: Awaited<ReturnType<typeof recoverOrderToPaid>>;
+  try {
+    result = await recoverOrderToPaid(orderId);
+  } catch (err) {
+    console.error("[recover] recoverOrderToPaid failed:", err);
+    return [{ type: "text", text: `กู้ออเดอร์ ${displayId} ไม่สำเร็จ (ระบบขัดข้อง) — ลองกดใหม่อีกครั้ง` }];
+  }
+
+  if (!result.ok) {
+    if (result.reason === "not_found") return [{ type: "text", text: `ไม่พบออเดอร์ ${displayId}` }];
+    if (result.reason === "bad_status") {
+      return [{ type: "text", text: `ออเดอร์ ${displayId} สถานะ ${result.order?.["Status"] || "?"} — กู้ไม่ได้ (กู้ได้เฉพาะที่หมดเวลา/รอจ่าย)` }];
+    }
+    return [{ type: "text", text: `กู้ออเดอร์ ${displayId} ไม่สำเร็จ` }];
+  }
+  if (result.alreadyPaid) {
+    return [{ type: "text", text: `ออเดอร์ ${displayId} ถูกยืนยันจ่ายไปแล้ว — ไม่ต้องกดซ้ำ` }];
+  }
+
+  const order = result.order!;
+  const amount = Number(order["Total"] || 0);
+  const custUserId = order["LINE User ID"] || "";
+  const sid = order["Shopify Order ID"] || "";
+  const needsShopify = !!order["Variant IDs"] && (sid === "" || sid.startsWith("FAILED"));
+
+  // Heavy follow-ups off the reply path so the owner gets an instant ack. Each
+  // step self-alerts the owner on failure (syncPaidOrderToShopify) or logs loudly.
+  after(async () => {
+    if (needsShopify) {
+      try {
+        await syncPaidOrderToShopify(order["Order ID"], order);
+      } catch (e) {
+        console.error("[recover] Shopify sync failed:", e);
+      }
+    } else {
+      console.log("[recover] Shopify order already present, skipping create:", sid);
+    }
+    try {
+      await logOrderStockMovement(order, "SOLD", 0, "กู้ออเดอร์: เจ้าของยืนยันว่าลูกค้าจ่ายแล้ว");
+    } catch (e) {
+      console.error("[recover] stock log failed:", e);
+    }
+    try {
+      revalidateTag(PRODUCTS_CACHE_TAG, { expire: 0 });
+    } catch {
+      // cache purge is best-effort
+    }
+    // Confirm to the CUSTOMER (push — this postback is in the OWNER's chat, so a
+    // replyToken can't reach the customer). Best-effort; never blocks the recover.
+    if (custUserId) {
+      try {
+        await getLineClient().pushMessage({
+          to: custUserId,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          messages: replyConfirmPayment(order["Order ID"], amount, order["Paid At"] || nowBKK()) as any,
+        });
+      } catch (e) {
+        console.error("[recover] customer confirm push failed:", e);
+      }
+    }
+  });
+
+  return [{
+    type: "text",
+    text: `✅ กู้ออเดอร์ ${displayId} (฿${amount}) เป็น PAID แล้ว\nกำลังสร้าง Shopify order + แจ้งลูกค้าให้อัตโนมัติ`,
+  }];
 }
 
 /* ── Postback handlers ── */
@@ -1186,6 +1272,14 @@ export async function POST(request: NextRequest) {
             const exitUid = event.source?.userId || "";
             await endChatSession(exitUid);
             messages = fallbackReply();
+            break;
+          }
+          case "recover_order": {
+            // Owner tapped "✅ ลูกค้าจ่ายแล้ว — กู้ออเดอร์" on an auto-cancel alert.
+            // The customer really paid (owner sees the slip) but the bot never
+            // captured it — the standby-manual-chat failure mode. Force the order
+            // to PAID by owner authority, no LINE re-delivery needed.
+            messages = await handleRecoverOrder(postbackOrderId);
             break;
           }
           case "select_size": {

@@ -12,6 +12,8 @@ import {
   type OrderRow,
 } from "@/lib/sheets";
 import { getLineClient } from "@/lib/line";
+import { alertOwnerOrderExpired } from "@/lib/order-sync";
+import { nowBKK } from "@/lib/edit-lock";
 
 const EXPIRE_MINUTES = ORDER_EXPIRE_MINUTES;
 
@@ -119,6 +121,24 @@ async function expireOrder(order: OrderRow, client: unknown): Promise<boolean> {
     } catch (lineErr) {
       console.error("[check-expired] LINE push failed:", lineErr);
     }
+  }
+
+  // BACKSTOP — alert the OWNER about every auto-cancellation. The real-time slip
+  // path can silently miss a payment (most notably LINE's native manual chat,
+  // where the slip arrives as a `standby` event that may be dropped or fail to
+  // verify without a trace). If that happened, the customer HAS paid but the order
+  // just expired. Pinging the owner at the moment of cancellation guarantees a
+  // genuine payment is never lost unnoticed — the owner opens the chat, sees the
+  // slip and confirms by hand. Best-effort: never let it block the expiry.
+  try {
+    await alertOwnerOrderExpired({
+      orderId,
+      amount: order["Total"] || "",
+      userId: lineUserId,
+      when: nowBKK(),
+    });
+  } catch (alertErr) {
+    console.error("[check-expired] Owner expiry alert failed:", alertErr);
   }
   return true;
 }

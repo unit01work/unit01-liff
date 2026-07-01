@@ -1,4 +1,4 @@
-import { GoogleSpreadsheet, GoogleSpreadsheetWorksheet } from "google-spreadsheet";
+import { GoogleSpreadsheet, GoogleSpreadsheetWorksheet, GoogleSpreadsheetRow } from "google-spreadsheet";
 import { JWT } from "google-auth-library";
 import { getAllVariantsWithStock } from "./shopify";
 
@@ -1450,6 +1450,73 @@ export interface ClaimPaymentResult {
 }
 
 /**
+ * How long after an order auto-expires a genuine (SlipOK-verified) slip can still
+ * revive it — covers a slip that LINE delivered/we processed late (e.g. standby
+ * manual chat). Kept generous because reviving a real payment is always safer than
+ * orphaning it, and the user+amount+recency match makes a false revive implausible.
+ */
+export const CLAIM_RECOVER_GRACE_MIN = 60;
+
+/** Map an in-hand Orders row to a typed OrderRow (no re-read, no save). */
+function mapRowToOrder(row: GoogleSpreadsheetRow): OrderRow {
+  return {
+    "Order ID": row.get("Order ID"),
+    "Date": row.get("Date"),
+    "LINE User ID": row.get("LINE User ID") || "",
+    "Status": (row.get("Status") || "").toUpperCase(),
+    "Items": row.get("Items"),
+    "Subtotal": Number(row.get("Subtotal") || 0),
+    "Shipping Fee": Number(row.get("Shipping Fee") || 0),
+    "Total": Number(row.get("Total") || 0),
+    "First Name": row.get("First Name"),
+    "Last Name": row.get("Last Name"),
+    "Phone": row.get("Phone"),
+    "Address": row.get("Address"),
+    "Sub-district": row.get("Sub-district"),
+    "District": row.get("District"),
+    "Province": row.get("Province"),
+    "Postal Code": row.get("Postal Code"),
+    "Updated At": row.get("Updated At") || "",
+    "Transaction Ref": row.get("Transaction Ref") || "",
+    "Paid At": row.get("Paid At") || "",
+    "Variant IDs": row.get("Variant IDs") || "",
+    "Shopify Order ID": row.get("Shopify Order ID") || "",
+    "Size Changed": row.get("Size Changed") || "",
+    "Address Changed": row.get("Address Changed") || "",
+  };
+}
+
+/**
+ * Flip an in-hand Orders row to PAID, persist it, and deduct the Stock tab — all
+ * INSIDE the caller's withLock() critical section. Shared by every "this order is
+ * now paid" path (live slip claim, late-slip self-heal, owner one-tap recover) so
+ * they behave identically. `transRef` is only written when non-empty (an owner
+ * recover has none); an existing Paid At is preserved. Returns the typed OrderRow.
+ */
+async function markRowPaidAndCommit(
+  doc: GoogleSpreadsheet,
+  row: GoogleSpreadsheetRow,
+  transRef: string,
+  now: string
+): Promise<OrderRow> {
+  row.set("Status", "PAID");
+  if (transRef) row.set("Transaction Ref", transRef);
+  if (!(row.get("Paid At") || "")) row.set("Paid At", now);
+  row.set("Updated At", now);
+  await row.save();
+  // Commit the sale against the Stock tab immediately, in-lock (see the long note
+  // on commitSaleToStockTab): the paid units must leave "Shopify Stock" right now
+  // so a concurrent buyer can't see them as available. Non-fatal — reconciled by
+  // the next refreshStockTab if it throws.
+  try {
+    await commitSaleToStockTab(doc, row.get("Variant IDs") || "");
+  } catch (stockErr) {
+    console.error("[claimPayment] Stock deduction failed (will reconcile on refresh):", stockErr);
+  }
+  return mapRowToOrder(row);
+}
+
+/**
  * Match a payment to a PENDING order and mark it PAID — ALL inside one locked
  * critical section. This closes two races at once:
  *   - same Transaction Ref delivered twice → second is rejected as "duplicate"
@@ -1484,59 +1551,88 @@ export async function claimPaymentForUser(
       const lineUserId = row.get("LINE User ID") || "";
       const total = Number(row.get("Total") || 0);
       if (status === "PENDING" && lineUserId === userId && total === amount) {
-        const now = nowBKK();
-        row.set("Status", "PAID");
-        if (transRef) row.set("Transaction Ref", transRef);
-        row.set("Paid At", now);
-        row.set("Updated At", now);
-        await row.save();
-
-        // Commit the sale against the Stock tab IMMEDIATELY, inside this same
-        // withLock critical section that createOrderGuarded also runs under. The
-        // guard subtracts only PENDING holds from "Shopify Stock", so the paid
-        // units must leave "Shopify Stock" right now — otherwise a concurrent
-        // order could see them as still available (oversell). Doing it in-lock
-        // means no order's stock check can interleave between the PAID flip and
-        // this deduction. refreshStockTab later SETS (not subtracts) these cells
-        // from live Shopify, so this never double-deducts.
-        try {
-          await commitSaleToStockTab(doc, row.get("Variant IDs") || "");
-        } catch (stockErr) {
-          // Non-fatal: the order is already PAID and will be reconciled by the
-          // next refreshStockTab. Log loudly so a missed deduction is visible.
-          console.error("[claimPayment] Stock deduction failed (will reconcile on refresh):", stockErr);
-        }
-        return {
-          ok: true,
-          order: {
-            "Order ID": row.get("Order ID"),
-            "Date": row.get("Date"),
-            "LINE User ID": lineUserId,
-            "Status": "PAID",
-            "Items": row.get("Items"),
-            "Subtotal": Number(row.get("Subtotal")),
-            "Shipping Fee": Number(row.get("Shipping Fee")),
-            "Total": total,
-            "First Name": row.get("First Name"),
-            "Last Name": row.get("Last Name"),
-            "Phone": row.get("Phone"),
-            "Address": row.get("Address"),
-            "Sub-district": row.get("Sub-district"),
-            "District": row.get("District"),
-            "Province": row.get("Province"),
-            "Postal Code": row.get("Postal Code"),
-            "Updated At": now,
-            "Transaction Ref": transRef || row.get("Transaction Ref") || "",
-            "Paid At": now,
-            "Variant IDs": row.get("Variant IDs") || "",
-            "Shopify Order ID": row.get("Shopify Order ID") || "",
-            "Size Changed": row.get("Size Changed") || "",
-            "Address Changed": row.get("Address Changed") || "",
-          },
-        };
+        const order = await markRowPaidAndCommit(doc, row, transRef, nowBKK());
+        return { ok: true, order };
       }
     }
+
+    // SELF-HEAL — no PENDING order matched, but this slip is a SlipOK-VERIFIED
+    // real payment (the caller only reaches here past the validity check). The
+    // most common cause of "no PENDING match" for a genuine slip is that the
+    // order auto-expired moments before the slip was processed — e.g. LINE
+    // delivered it late while the owner was in native manual chat (standby). So
+    // rather than orphaning the money, revive the NEWEST recently-EXPIRED order
+    // for this user+amount (within the grace window) back to PAID. Only EXPIRED
+    // rows within CLAIM_RECOVER_GRACE_MIN are eligible, so an old cancelled order
+    // can never be silently resurrected by a coincidental same-amount payment.
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const row = rows[i];
+      if ((row.get("Status") || "").toUpperCase() !== "EXPIRED") continue;
+      if ((row.get("LINE User ID") || "") !== userId) continue;
+      if (Number(row.get("Total") || 0) !== amount) continue;
+      // "Updated At" holds the moment it was flipped EXPIRED; fall back to Date.
+      const expiredMs = parseSheetTimestamp(row.get("Updated At") || row.get("Date") || "");
+      if (
+        !Number.isNaN(expiredMs) &&
+        Date.now() - expiredMs > CLAIM_RECOVER_GRACE_MIN * 60 * 1000
+      ) {
+        continue; // expired too long ago — not a late-slip case
+      }
+      console.log("[claimPayment] Self-heal: reviving recently-EXPIRED order", row.get("Order ID"));
+      const order = await markRowPaidAndCommit(doc, row, transRef, nowBKK());
+      return { ok: true, order };
+    }
+
     return { ok: false, reason: "no_match" };
+  });
+}
+
+/** Result of an owner-driven manual recovery of an expired/pending order. */
+export interface RecoverResult {
+  ok: boolean;
+  reason?: "not_found" | "bad_status";
+  /** true when the order was ALREADY paid — nothing changed (idempotent tap). */
+  alreadyPaid?: boolean;
+  order?: OrderRow;
+}
+
+/**
+ * Owner one-tap recovery: force an EXPIRED (or still-PENDING) order to PAID after
+ * the owner has confirmed by eye that the customer really paid (e.g. they can see
+ * the slip in the LINE chat but the bot never captured it — the standby-manual-chat
+ * failure mode). This does NOT depend on LINE re-delivering the slip: the owner is
+ * the authority. Runs under withLock and is IDEMPOTENT — a double tap on an already
+ * PAID order is a no-op (never a second Shopify order / stock deduction). The caller
+ * creates the Shopify order + logs stock outside the lock, exactly like a normal
+ * paid slip. Refuses statuses other than EXPIRED/PENDING (e.g. a real CANCELLED).
+ */
+export async function recoverOrderToPaid(
+  orderId: string,
+  transRef = ""
+): Promise<RecoverResult> {
+  return withLock(async () => {
+    const doc = getDoc();
+    await doc.loadInfo();
+    const sheet = doc.sheetsByTitle["Orders"];
+    if (!sheet) return { ok: false, reason: "not_found" };
+    try { await sheet.loadHeaderRow(); } catch { return { ok: false, reason: "not_found" }; }
+
+    const rows = await sheet.getRows();
+    const row = rows.find((r) => matchOrderId(r.get("Order ID") || "", orderId));
+    if (!row) return { ok: false, reason: "not_found" };
+
+    const status = (row.get("Status") || "").toUpperCase();
+    // Idempotent: already paid → return it untouched (no re-sync, no re-deduct).
+    if (status === "PAID") {
+      return { ok: true, alreadyPaid: true, order: mapRowToOrder(row) };
+    }
+    // Only an EXPIRED (timed-out) or still-PENDING order may be confirmed by hand.
+    if (status !== "EXPIRED" && status !== "PENDING") {
+      return { ok: false, reason: "bad_status", order: mapRowToOrder(row) };
+    }
+
+    const order = await markRowPaidAndCommit(doc, row, transRef, nowBKK());
+    return { ok: true, order };
   });
 }
 

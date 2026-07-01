@@ -162,6 +162,98 @@ export async function alertOwnerOrphanPayment(args: {
 }
 
 /**
+ * Push a LINE alert to the shop owner when an order is AUTO-CANCELLED for payment
+ * timeout. This is the guaranteed backstop against silently-lost payments: the
+ * real-time slip path (LINE webhook → SlipOK) can miss a slip for reasons outside
+ * our control — most importantly LINE's native manual chat, which delivers the
+ * slip image as a `standby` event that can be dropped or fail to verify silently.
+ * When that happens the customer HAS paid but the order just expires with no trace.
+ *
+ * By alerting the owner at the exact moment of cancellation, a genuine payment is
+ * never lost without anyone noticing: the owner opens the chat, sees the slip, and
+ * confirms by hand. Includes the order, amount and customer so it's actionable.
+ * Never throws (expiry must not be blocked by a push failure).
+ */
+export async function alertOwnerOrderExpired(args: {
+  orderId: string;
+  amount: string | number;
+  userId: string;
+  when: string;
+}): Promise<void> {
+  if (
+    !OWNER_LINE_USER_ID ||
+    !process.env.LINE_CHANNEL_ACCESS_TOKEN ||
+    process.env.LINE_CHANNEL_ACCESS_TOKEN === "YOUR_CHANNEL_ACCESS_TOKEN_HERE"
+  ) {
+    console.error("[order-sync] Cannot alert owner (expired) — missing LINE token / owner id");
+    return;
+  }
+  let customerName = "";
+  try {
+    if (args.userId) {
+      const p = await getLineClient().getProfile(args.userId);
+      customerName = p?.displayName || "";
+    }
+  } catch {
+    // profile lookup is best-effort — never block the alert on it
+  }
+  const displayId = args.orderId.startsWith("#") ? args.orderId : `#${args.orderId}`;
+  // The button carries the order id back as a postback; encode so a "#" survives.
+  const recoverData = `action=recover_order&orderId=${encodeURIComponent(args.orderId)}`;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bodyContents: any[] = [
+    { type: "text", text: "[เตือน] ออเดอร์หมดเวลา ถูกยกเลิกอัตโนมัติ", size: "sm", weight: "bold", color: "#C44A3A", wrap: true },
+    { type: "text", text: `${displayId} · ฿${args.amount}`, size: "sm", color: "#16171C", margin: "sm" },
+  ];
+  if (customerName) {
+    bodyContents.push({ type: "text", text: `ลูกค้า: ${customerName}`, size: "xs", color: "#444444", wrap: true });
+  }
+  bodyContents.push(
+    { type: "text", text: `LINE: ${args.userId}`, size: "xxs", color: "#AAAAAA", wrap: true },
+    { type: "text", text: "ถ้าลูกค้าส่งสลิปมาแล้ว (เช่นตอนแชทแมนนวลของ LINE) = จ่ายจริงแต่บอทไม่ได้ตรวจ กดปุ่มด้านล่างเพื่อกู้ออเดอร์ (มาร์ค PAID + สร้าง Shopify + แจ้งลูกค้า)", size: "xxs", color: "#888888", wrap: true, margin: "md" },
+    {
+      type: "button",
+      style: "primary",
+      color: "#5B805E",
+      height: "sm",
+      margin: "md",
+      action: {
+        type: "postback",
+        label: "✅ ลูกค้าจ่ายแล้ว — กู้ออเดอร์",
+        data: recoverData,
+        displayText: `กู้ออเดอร์ ${displayId}`,
+      },
+    }
+  );
+
+  const flex = {
+    type: "flex" as const,
+    altText: `ออเดอร์หมดเวลา ${displayId} — กดกู้ถ้าลูกค้าจ่ายแล้ว`,
+    contents: {
+      type: "bubble" as const,
+      size: "kilo" as const,
+      body: {
+        type: "box" as const,
+        layout: "vertical" as const,
+        paddingAll: "lg" as const,
+        spacing: "sm" as const,
+        contents: bodyContents,
+      },
+    },
+  };
+
+  try {
+    const cl = getLineClient();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await cl.pushMessage({ to: OWNER_LINE_USER_ID, messages: [flex as any] });
+    console.log("[order-sync] Owner alerted about expired order:", displayId);
+  } catch (e) {
+    console.error("[order-sync] Could not alert owner about expired order:", displayId, e);
+  }
+}
+
+/**
  * Push a LINE alert to the shop owner when a POST-PAYMENT EDIT (change size /
  * edit shipping address) was saved to the sheet but failed to sync to Shopify.
  * The Shopify order still exists with stale data, so the owner must fix it by
