@@ -131,9 +131,9 @@ export async function PUT(
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // Time-lock takes precedence over edit-once: past the 10:00 deadline the
+    // Time-lock takes precedence over edit-once: past the 18:00 deadline the
     // order is being prepared for shipping and can no longer be edited. Server
-    // gate so a customer who kept the LIFF form open past 10:00 is still blocked.
+    // gate so a customer who kept the LIFF form open past 18:00 is still blocked.
     if (isPaid && isEditLocked(existingOrder)) {
       return NextResponse.json({ error: buildLockedMessage(orderId) }, { status: 403 });
     }

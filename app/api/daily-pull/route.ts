@@ -4,7 +4,7 @@ import { runDailyPull } from "@/lib/daily-pull/run";
 /**
  * UNIT-01 daily-pull worklist (full flow).
  *
- * 10:00 ICT cron -> pull every PAID + UNFULFILLED Shopify order in the window ->
+ * 18:00 ICT cron -> pull every PAID + UNFULFILLED Shopify order in the window ->
  * write the per-day worklist tab (WL-YYYY-MM-DD) -> reconcile against a fresh
  * Shopify re-pull (auto-fix once, else flag) -> tag `worklisted` for idempotency
  * -> alert carry-over stragglers separately -> report every step in Thai on LINE.

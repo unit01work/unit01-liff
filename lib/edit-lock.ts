@@ -39,8 +39,8 @@ export function nowBKK(): string {
  * Google Sheets coerces our stored "YYYY-MM-DD HH:MM" into a date serial and
  * reformats it with the pattern `yyyy-mm-dd h:mm` — a SINGLE `h` — so any order
  * paid in hours 00–09 reads back as e.g. "2026-06-14 2:57", not "02:57". Without
- * padding, "2:57" > "10:00" lexically ('2' > '1'), so computeEditDeadline thinks
- * an early-morning order was paid AFTER 10:00 and rolls the deadline to the next
+ * padding, "2:57" > "18:00" lexically ('2' > '1'), so computeEditDeadline thinks
+ * an early-morning order was paid AFTER 18:00 and rolls the deadline to the next
  * day — leaving the order editable long past its real cutoff. (Same root cause
  * parseSheetTimestamp guards in lib/sheets.) Pads only the hour; minutes are
  * always two digits.
@@ -74,7 +74,7 @@ export function computeEditDeadline(paidAtRaw: string): string {
 
 /**
  * Human-readable deadline for customer messages.
- * "2026-06-19 10:00" → "19 Jun 2026 · 10:00 (GMT+7)"
+ * "2026-06-19 18:00" → "19 Jun 2026 · 18:00 (GMT+7)"
  */
 export function formatDeadline(deadline: string): string {
   const m = (deadline || "").match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/);
@@ -92,7 +92,7 @@ function paidAtOf(order: OrderRow): string {
 
 /**
  * Is editing this order locked right now (i.e. past its deadline)?
- * Locked when current Bangkok time has reached the deadline (>= 10:00 ICT).
+ * Locked when current Bangkok time has reached the deadline (>= 18:00 ICT).
  * If we can't determine a paid time we DON'T lock (fail-open: never block a
  * legitimate edit due to a missing timestamp; edit-once still guards abuse).
  */
@@ -110,7 +110,7 @@ export function orderDeadline(order: OrderRow): string {
 /**
  * Option-2 locked message (English). Shown when a customer presses edit after
  * the deadline. Keeps the order number visible. Deliberately avoids the word
- * "shipped" — at 10:00 the goods are being prepared, not actually shipped yet.
+ * "shipped" — at 18:00 the goods are being prepared, not actually shipped yet.
  */
 export function buildLockedMessage(orderId: string): string {
   const id = `#${orderId.replace("#", "")}`;

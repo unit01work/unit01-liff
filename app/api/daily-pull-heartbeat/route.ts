@@ -7,8 +7,8 @@ import { CUTOFF_TIME } from "@/lib/config";
 /**
  * Heartbeat for the daily-pull worklist (never-silent guard).
  *
- * Runs at 10:30 ICT, 30 min after the pull. If today's worklist tab is missing,
- * the 10:00 run didn't happen -> alert LINE. An empty tab (0 orders) still
+ * Runs at 18:30 ICT, 30 min after the pull. If today's worklist tab is missing,
+ * the 18:00 run didn't happen -> alert LINE. An empty tab (0 orders) still
  * counts as "ran", so a genuinely quiet day doesn't false-alarm.
  *
  *   GET /api/daily-pull-heartbeat?key=...   (or Bearer CRON_SECRET)

@@ -147,7 +147,7 @@ function mapOrder(o: RawOrderNode): PulledOrder {
 
 // Pull every PAID + UNFULFILLED order created in (or near) a UTC range.
 // We query by created_at with a 1-day pad on each side, then the caller slices
-// precisely by paidAt vs the 10:00 ICT cutoff. `excludeWorklisted` skips orders
+// precisely by paidAt vs the 18:00 ICT cutoff. `excludeWorklisted` skips orders
 // already tagged (normal daily run); a manual ?date= regen passes false.
 export async function pullPaidUnfulfilledOrders(opts: {
   rangeStartUtc: Date;

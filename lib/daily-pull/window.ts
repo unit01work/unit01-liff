@@ -10,11 +10,11 @@ import { CUTOFF_HOUR, CUTOFF_MINUTE } from "../config";
 const ICT_OFFSET_MS = 7 * 60 * 60 * 1000;
 
 export interface PullWindow {
-  // The round's date label (the ICT calendar date of the closing 10:00). This
+  // The round's date label (the ICT calendar date of the closing 18:00). This
   // is what names the worklist tab, e.g. "2026-06-12".
   dateLabel: string;
-  startUtc: Date; // inclusive — yesterday 10:00 ICT
-  endUtc: Date; // exclusive — today 10:00 ICT
+  startUtc: Date; // inclusive — yesterday 18:00 ICT
+  endUtc: Date; // exclusive — today 18:00 ICT
 }
 
 // ICT wall-clock parts of a UTC instant.
@@ -62,15 +62,15 @@ export function resolveWindow(dateParam?: string | null, now: Date = new Date())
     const [y, m, d] = dateParam.split("-").map(Number);
     endParts = { year: y, month: m, day: d };
   } else {
-    // The round that closes at the next 10:00 ICT boundary <= now's day.
-    // If it's already past 10:00 ICT today, the closing boundary is today 10:00;
-    // before 10:00 ICT, the current open round still closes today 10:00.
+    // The round that closes at the next 18:00 ICT boundary <= now's day.
+    // If it's already past 18:00 ICT today, the closing boundary is today 18:00;
+    // before 18:00 ICT, the current open round still closes today 18:00.
     const p = ictParts(now);
     endParts = { year: p.year, month: p.month, day: p.day };
   }
 
   const endUtc = ictCutoffUtc(endParts.year, endParts.month, endParts.day);
-  // start = 24h earlier (yesterday 10:00 ICT)
+  // start = 24h earlier (yesterday 18:00 ICT)
   const startUtc = new Date(endUtc.getTime() - 24 * 60 * 60 * 1000);
   return { dateLabel: ictParts(endUtc).dateLabel, startUtc, endUtc };
 }

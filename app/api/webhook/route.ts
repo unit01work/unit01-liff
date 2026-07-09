@@ -682,7 +682,7 @@ async function handleChangeSize(orderId: string) {
   const order = await getOrder(orderId);
   if (!order) return [{ type: "text" as const, text: "Order not found." }];
 
-  // Time-lock takes precedence: past 10:00 deadline → no edits at all.
+  // Time-lock takes precedence: past 18:00 deadline → no edits at all.
   if (isEditLocked(order)) {
     return [{ type: "text" as const, text: buildLockedMessage(orderId) }];
   }
@@ -829,7 +829,7 @@ async function handleSelectSize(
   if (!order) return [{ type: "text" as const, text: "Order not found." }];
 
   // Time-lock takes precedence: re-check at commit time (defense in depth — the
-  // customer may have crossed 10:00 between opening the size picker and tapping).
+  // customer may have crossed 18:00 between opening the size picker and tapping).
   if (isEditLocked(order)) {
     return [{ type: "text" as const, text: buildLockedMessage(orderId) }];
   }
@@ -1091,7 +1091,7 @@ async function handleSelectOrder(orderId: string, nextAction: string) {
       // Check lock
       const order = await getOrder(orderId);
       const displayId = `#${orderId.replace("#", "")}`;
-      // Time-lock takes precedence: past 10:00 deadline the order is being
+      // Time-lock takes precedence: past 18:00 deadline the order is being
       // prepared for shipping and cannot be edited at all.
       if (order && isEditLocked(order)) {
         return [{ type: "text" as const, text: buildLockedMessage(orderId) }];

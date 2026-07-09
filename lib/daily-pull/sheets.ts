@@ -76,7 +76,7 @@ export async function writeWorklistTab(
   };
 }
 
-// Does the day's worklist tab exist? Used by the heartbeat to tell "the 10:00
+// Does the day's worklist tab exist? Used by the heartbeat to tell "the 18:00
 // run never happened" apart from "it ran and had 0 orders" (an empty tab still
 // exists). Returns the row count too.
 export async function worklistTabStatus(
