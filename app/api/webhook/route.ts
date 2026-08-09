@@ -63,6 +63,14 @@ import {
 import { OWNER_LINE_USER_ID, SHIP_NOTIFY_CODE } from "@/lib/ship-notify/config";
 import { listDaysWithCounts, buildPlanForTab, sendPlanForTab } from "@/lib/ship-notify/run";
 import { buildDayPicker, buildConfirmCard } from "@/lib/ship-notify/confirm-card";
+import {
+  getSalesMode,
+  setSalesMode,
+  SALES_MODE_CODE,
+  buildSalesControlCard,
+  buildSalesModeChangedCard,
+  type SalesMode,
+} from "@/lib/sales-mode";
 import { pushAdmin } from "@/lib/daily-pull/notify";
 
 const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}`;
@@ -1215,6 +1223,9 @@ export async function POST(request: NextRequest) {
           // Off the hot path so LINE still gets a fast 200 (SlipOK + Shopify are slow).
           after(async () => {
             try {
+              // Manual mode: the owner verifies all payments by hand — never
+              // auto-process slips, even the standby ones.
+              if ((await getSalesMode()) === "MANUAL") return;
               const sbMsgs = await handleSlipImage(sbMessageId, sbUserId, true, "standby");
               if (sbMsgs && sbMsgs.length > 0 && sbUserId) {
                 await getLineClient()
@@ -1232,6 +1243,60 @@ export async function POST(request: NextRequest) {
       if (!event.replyToken) continue;
       const replyToken: string = event.replyToken;
       let messages;
+
+      // ── SYSTEM CONTROL (owner-only global manual-mode switch) ──
+      // Handled BEFORE the manual-mode silence gate below so the owner can ALWAYS
+      // toggle the system back on, even while everything else is silenced.
+      {
+        const ownerHere = event.source?.userId === OWNER_LINE_USER_ID;
+        // (a) owner types the secret code → show the control card
+        if (
+          ownerHere &&
+          event.type === "message" &&
+          event.message?.type === "text" &&
+          event.message.text.trim() === SALES_MODE_CODE
+        ) {
+          try {
+            const mode = await getSalesMode();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await client.replyMessage({ replyToken, messages: [buildSalesControlCard(mode) as any] });
+          } catch (e) {
+            console.error("[sales-mode] control card failed:", e);
+          }
+          continue;
+        }
+        // (b) owner taps a toggle button on the control card
+        if (ownerHere && event.type === "postback") {
+          const a = new URLSearchParams(event.postback.data).get("action");
+          if (a === "sales_manual" || a === "sales_auto") {
+            const next: SalesMode = a === "sales_manual" ? "MANUAL" : "AUTO";
+            try {
+              await setSalesMode(next);
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              await client.replyMessage({ replyToken, messages: [buildSalesModeChangedCard(next) as any] });
+            } catch (e) {
+              console.error("[sales-mode] toggle failed:", e);
+              await client
+                .replyMessage({ replyToken, messages: [{ type: "text", text: "สลับโหมดไม่สำเร็จ ลองใหม่อีกครั้ง" }] })
+                .catch(() => {});
+            }
+            continue;
+          }
+        }
+      }
+
+      // ── MANUAL MODE gate ── system paused → the bot does NOTHING (except the
+      // owner control above): no replies, no slip verification, no welcome. The
+      // owner handles every order / payment / message by hand. Fail-open: a
+      // Sheets error behaves as AUTO so a hiccup can never lock the bot out.
+      try {
+        if ((await getSalesMode()) === "MANUAL") {
+          console.log("[webhook] Manual mode active — staying silent");
+          continue;
+        }
+      } catch (e) {
+        console.error("[sales-mode] gate read failed — fail-open to AUTO:", e);
+      }
 
       // ── Postback events ──
       if (event.type === "postback") {

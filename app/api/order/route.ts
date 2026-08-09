@@ -45,6 +45,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid order data" }, { status: 400 });
     }
 
+    // Sales paused? (owner is running a manual campaign — flag flipped from the
+    // LINE control card). Refuse new orders so even a cached / deep-linked LIFF
+    // client can't self-checkout while the shop is closed. FAIL-OPEN: any error
+    // reading the flag lets the order proceed — this guard must NEVER block a
+    // real sale because of a Sheets hiccup. (Seam file shared with Backend B.)
+    try {
+      const { getSalesMode } = await import("@/lib/sales-mode");
+      if ((await getSalesMode()) === "MANUAL") {
+        return NextResponse.json(
+          { error: "shop_closed", message: "ร้านปิดรับออเดอร์ชั่วคราว" },
+          { status: 503 }
+        );
+      }
+    } catch (smErr) {
+      console.error("[order] sales-mode check failed — allowing order:", smErr);
+    }
+
     const orderId = generateOrderId();
     const { cart, shipping } = body;
     const sub = cart.reduce((s, c) => s + c.price * c.qty, 0);

@@ -57,6 +57,7 @@ UNIT-01 = ร้านขายเสื้อสตรีทแวร์ ขา
 | ADMIN_LINE_USER_ID | (ออปชัน) LINE userId รับแจ้งเตือน daily-pull — ไม่ตั้งจะ fallback `OWNER_LINE_USER_ID` |
 | SHIP_NOTIFY_CODE | (ออปชัน) รหัสลับที่เจ้าของพิมพ์เพื่อเปิดเมนู ship-notify (default `neosneo2375` ใน config) — ชั้นกันที่ 2 ถัดจาก userId gate |
 | CARRIER_SHEETS_ID | (ออปชัน) ID Google Sheet ของขนส่ง (Flash) ที่กรอกเลขพัสดุรายวัน — ship-notify อ่านจากไฟล์นี้ (มี default ใน config) |
+| SALES_MODE_CODE | (ออปชัน) รหัสลับที่เจ้าของพิมพ์เพื่อเปิดการ์ด SYSTEM CONTROL (ปิด/เปิดระบบขายทั้งหมด) — default `141990` ใน `lib/sales-mode.ts` — ชั้นกันที่ 2 ถัดจาก userId gate |
 
 > ถ้าต้องการค่าจริง: `cat .env.local` หรือดู backup ที่ `Desktop/unit01-liff-backup/02-ENV-VARIABLES/`
 > หมายเหตุ Vercel: ฝั่ง Vercel ใช้ `GOOGLE_PRIVATE_KEY_BASE64` (base64) แทน `GOOGLE_PRIVATE_KEY` และมี `SHOPIFY_CLIENT_SECRET` เพิ่ม
@@ -116,6 +117,10 @@ Date, Type (RESERVED/SOLD/RETURNED/RESTOCK), Product, Size, Variant ID, Change, 
 Order Name, Tracking, Channel (line/email), LINE User ID, Notified At, Date Tab
 - อยู่ในชีตเดิม "UNIT-01 Orders" — `lib/ship-notify/state.ts` (`loadNotified()` / `markNotified()`) สร้าง tab อัตโนมัติถ้ายังไม่มี
 - บันทึกทุกออเดอร์ที่แจ้งลูกค้า "จัดส่งแล้ว" ไปแล้ว → รันซ้ำวันเดิม (เลขพัสดุมาช้า) จะแจ้งเฉพาะรายใหม่ ไม่แจ้งซ้ำ
+
+### Tab "System" (เสร็จแล้ว — key/value ของ manual-mode switch)
+Key, Value, Updated At — เก็บ 1 แถว `SALES_MODE = AUTO | MANUAL` (ดูหัวข้อ "Manual-mode switch")
+- สร้าง tab อัตโนมัติถ้ายังไม่มี — `lib/sales-mode.ts` มี auth ของตัวเอง (mirror `lib/chat-session.ts`) ไม่ import `lib/sheets.ts`
 
 > Finance เป็นไฟล์แยก (UNIT-01 expense-template) มี tab REVENUE อยู่แล้ว — ยังไม่เชื่อม รอทำทีหลัง
 
@@ -303,6 +308,22 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
 - **Resend guard = tab "Ship Notified"** (`lib/ship-notify/state.ts`) — บันทึกทุกออเดอร์ที่แจ้งแล้ว. รันซ้ำวันเดิม (เลขพัสดุมาช้า) แจ้งเฉพาะรายใหม่. mark เฉพาะที่ส่งสำเร็จ → รายที่พลาดถูก retry รอบหน้า
 - **เกี่ยวกับ "Track my order":** ORDER STATUS ของลูกค้าอ่าน fulfillment จาก Shopify อยู่แล้ว → โชว์ `[ Shipped ]` + carrier + tracking + ลิงก์ (มี/ไม่มีเลขพัสดุ). ship-notify คือฝั่ง **push แจ้งเชิงรุก**, track คือฝั่ง **ลูกค้าถามเอง** — คนละทาง
 - **Phase 2b (ยังไม่ทำ):** ช่อง `email` ตอน dry-run/บาง path ยัง flag ไว้ให้เจ้าของจัดการ — auto-fulfill ฝั่ง email ทำแล้วใน `fulfillWithTracking` แต่ยังต้องเทสจริงเพิ่ม
+
+---
+
+## Manual-mode switch — ปิด/เปิดระบบขายทั้งหมดจากปุ่มใน LINE (Backend A)
+สวิตช์ให้เจ้าของ "ปิดระบบอัตโนมัติทั้งร้าน" ชั่วคราว (เช่นวันดรอป close-friend ที่รับออเดอร์เองมือล้วน) แล้วกดกลับเป็นปกติได้ โดยไม่ต้อง redeploy. **โมดูลแยกตัวเอง `lib/sales-mode.ts` (mirror `lib/chat-session.ts` — ลบทั้งก้อนได้ไม่กระทบ sales loop) + ผูกเข้า `app/api/webhook/route.ts` และ `app/api/order/route.ts` (seam ร่วมกับ Backend B)**
+- **2 โหมด:** `AUTO` = ทำงานปกติ · `MANUAL` = ปิดระบบ. เก็บใน **tab "System"** (key `SALES_MODE`) + cache ในหน่วยความจำ 10 วิ (อ่านบน hot path ถูก throttle เหลือ Sheets round-trip อย่างมาก 1 ครั้ง/10 วิ/instance)
+- **Trigger (เจ้าของเท่านั้น):** เจ้าของพิมพ์ **รหัสลับ `SALES_MODE_CODE`** (default `141990`) จาก LINE ตัวเอง → gate 2 ชั้น: `userId === OWNER_LINE_USER_ID` + ข้อความตรงรหัสเป๊ะ → ตอบการ์ด **SYSTEM CONTROL** (สถานะ + ปุ่ม 🔴 ปิดระบบ / 🟢 เปิดระบบ). เช็ค **ก่อน** ทุก gate → ใช้ได้ทุกสถานะ. คนอื่นพิมพ์รหัส = ไม่มีอะไรเกิด
+- **ปุ่ม:** postback `action=sales_manual` / `action=sales_auto` (owner-only ซ้ำ) → `setSalesMode()` เขียนชีต + อัพเดต cache ทันที → ตอบการ์ดยืนยัน `buildSalesModeChangedCard`
+- **ตอน MANUAL เกิดอะไรบ้าง:**
+  1. **หน้าร้านสั่งไม่ได้** — `app/api/order/route.ts` เช็ค `getSalesMode()` หลัง validate → ถ้า MANUAL ตอบ 503 `shop_closed` (กัน LIFF ที่ cache/deep-link ไว้ self-checkout)
+  2. **บอทเงียบสนิท** — webhook มี gate หลัง SYSTEM CONTROL block: ถ้า MANUAL → `continue` ทุก event (ไม่ตอบข้อความ/ไม่ตรวจสลิป active)
+  3. **ไม่ตรวจสลิป standby** — ใน `after()` ของ standby slip เช็ค MANUAL แล้ว `return` ก่อน `handleSlipImage`
+  4. **แอดเพื่อนใหม่ไม่ส่งอะไร** — follow event ก็โดน gate MANUAL เหมือนกัน (ไม่ส่ง welcome)
+- **FAIL-SAFE:** เป็น MANUAL เฉพาะเมื่อค่าในชีตเป็น `"MANUAL"` เป๊ะ ๆ. อย่างอื่น (ว่าง/อ่านพลาด/ไม่มี tab) = AUTO → glitch ทำร้านค้างปิดไม่ได้. อ่านพลาดกลางคันจะคง last-known mode ไว้
+- **FAIL-OPEN (order path):** ถ้าอ่านแฟลก error ที่ `app/api/order/route.ts` จะ **ปล่อยออเดอร์ผ่าน** — guard นี้ห้ามบล็อกการขายจริงเพราะ Sheets สะดุดเด็ดขาด
+- **เทส:** `scripts/loadtest/test-sales-mode.ts` (ยิง TEST sheet เท่านั้น) พิสูจน์ round-trip MANUAL↔AUTO ด้วย cold read + โครงการ์ด — 9/9 ผ่าน. เหลือ TEST sheet เป็น AUTO เสมอ
 
 ---
 
