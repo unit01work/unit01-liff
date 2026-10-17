@@ -79,10 +79,14 @@ import { pushAdmin } from "@/lib/daily-pull/notify";
 const LIFF_URL = `https://liff.line.me/${process.env.NEXT_PUBLIC_LIFF_ID}`;
 
 /* ── keyword maps ── */
-// Catalog / Contact Us keyword auto-replies are configured separately in the
-// LINE Official Account console (owner-managed) — not handled here. We keep the
-// Contact menu trigger so "contact us" still opens the in-chat support menu.
-const CONTACT_KEYWORDS = ["contact", "ติดต่อ", "contact us"];
+// The in-chat self-service menu (ORDER SUPPORT card: edit address / change size /
+// track order / chat with team) opens on "support".
+const SUPPORT_KEYWORDS = ["support"];
+
+// "contact us" / "contact" / "ติดต่อ" are answered by the owner's LINE Official
+// Account keyword auto-reply (a Thai "leave your message here" text). The bot
+// stays SILENT on these so the two replies don't collide — see the text branch.
+const OA_CONTACT_KEYWORDS = ["contact us", "contact", "ติดต่อ"];
 
 // Typing any of these while in chat-with-team mode breaks out of the handoff
 // (session ends) and the message is handled normally — "return to the shop".
@@ -151,8 +155,9 @@ function chatEnterReply() {
 // Single fallback for any inbound text/sticker that matches no configured
 // keyword. Sent as a LINE Flex menu (per LINE message spec §3): three tappable
 // rows — Order here (opens the LIFF shop), View products (sends "CATALOG"),
-// Contact us (sends "contact us", which CONTACT_KEYWORDS picks up). Each row's
-// whole box carries the action so the entire row is tappable.
+// Contact us (sends "contact us" → answered by the LINE OA Manager keyword
+// auto-reply; the bot itself stays silent). Each row's whole box carries the
+// action so the entire row is tappable.
 function fallbackReply() {
   return [
     {
@@ -305,9 +310,9 @@ function replyNoMatchingOrder(amount: number) {
 
 function replyInvalidSlip() {
   // Red text-only Flex (no top bar) + a small gray "Still stuck? Contact us"
-  // button. The button reuses the EXISTING Contact flow: action message
-  // "contact us" → CONTACT_KEYWORDS → buildContactMenuNoOrder (ORDER SUPPORT
-  // menu). No new contact card / handler is created.
+  // button. The button sends "contact us", which is answered by the LINE OA
+  // Manager keyword auto-reply (the bot stays silent on contact keywords) so a
+  // stuck customer reaches a human. The self-service menu opens on "support".
   return [
     {
       type: "flex",
@@ -1598,9 +1603,15 @@ export async function POST(request: NextRequest) {
       if (event.message.type === "text") {
         const text: string = event.message.text;
 
-        if (matchKeyword(text, CONTACT_KEYWORDS)) {
-          // From Rich Menu — send Contact menu without order ID
+        if (matchKeyword(text, SUPPORT_KEYWORDS)) {
+          // "support" — open the in-chat self-service menu (no order ID).
           messages = [buildContactMenuNoOrder()];
+        } else if (matchKeyword(text, OA_CONTACT_KEYWORDS)) {
+          // "contact us" etc. — handled by the LINE OA Manager keyword auto-reply
+          // (Thai "leave your message here"). Stay silent so the bot doesn't
+          // collide with that message by also firing the fallback menu.
+          console.log("[webhook] Contact keyword — deferring to OA Manager auto-reply");
+          continue;
         } else {
           // No configured keyword matched → single fallback menu. Owner can mute
           // this catch-all ("auto-reply OFF") from the SYSTEM CONTROL card during
