@@ -118,8 +118,8 @@ Order Name, Tracking, Channel (line/email), LINE User ID, Notified At, Date Tab
 - อยู่ในชีตเดิม "UNIT-01 Orders" — `lib/ship-notify/state.ts` (`loadNotified()` / `markNotified()`) สร้าง tab อัตโนมัติถ้ายังไม่มี
 - บันทึกทุกออเดอร์ที่แจ้งลูกค้า "จัดส่งแล้ว" ไปแล้ว → รันซ้ำวันเดิม (เลขพัสดุมาช้า) จะแจ้งเฉพาะรายใหม่ ไม่แจ้งซ้ำ
 
-### Tab "System" (เสร็จแล้ว — key/value ของ manual-mode switch)
-Key, Value, Updated At — เก็บ 1 แถว `SALES_MODE = AUTO | MANUAL` (ดูหัวข้อ "Manual-mode switch")
+### Tab "System" (เสร็จแล้ว — key/value ของ manual-mode switch + auto-reply mute)
+Key, Value, Updated At — เก็บ `SALES_MODE = AUTO | MANUAL` (ดูหัวข้อ "Manual-mode switch") + `AUTO_REPLY = ON | OFF` (ดูหัวข้อ "Auto-reply mute")
 - สร้าง tab อัตโนมัติถ้ายังไม่มี — `lib/sales-mode.ts` มี auth ของตัวเอง (mirror `lib/chat-session.ts`) ไม่ import `lib/sheets.ts`
 
 > Finance เป็นไฟล์แยก (UNIT-01 expense-template) มี tab REVENUE อยู่แล้ว — ยังไม่เชื่อม รอทำทีหลัง
@@ -323,7 +323,15 @@ Flex 4 ปุ่ม: `[ 1 ]` Edit shipping address · `[ 2 ]` Change size · `[ 
   4. **แอดเพื่อนใหม่ไม่ส่งอะไร** — follow event ก็โดน gate MANUAL เหมือนกัน (ไม่ส่ง welcome)
 - **FAIL-SAFE:** เป็น MANUAL เฉพาะเมื่อค่าในชีตเป็น `"MANUAL"` เป๊ะ ๆ. อย่างอื่น (ว่าง/อ่านพลาด/ไม่มี tab) = AUTO → glitch ทำร้านค้างปิดไม่ได้. อ่านพลาดกลางคันจะคง last-known mode ไว้
 - **FAIL-OPEN (order path):** ถ้าอ่านแฟลก error ที่ `app/api/order/route.ts` จะ **ปล่อยออเดอร์ผ่าน** — guard นี้ห้ามบล็อกการขายจริงเพราะ Sheets สะดุดเด็ดขาด
-- **เทส:** `scripts/loadtest/test-sales-mode.ts` (ยิง TEST sheet เท่านั้น) พิสูจน์ round-trip MANUAL↔AUTO ด้วย cold read + โครงการ์ด — 9/9 ผ่าน. เหลือ TEST sheet เป็น AUTO เสมอ
+- **เทส:** `scripts/loadtest/test-sales-mode.ts` (ยิง TEST sheet เท่านั้น) พิสูจน์ round-trip MANUAL↔AUTO + ON↔OFF ด้วย cold read + โครงการ์ด — 15/15 ผ่าน. เหลือ TEST sheet เป็น AUTO + auto-reply ON เสมอ
+
+### Auto-reply mute — ปิด "เมนูตอบมั่ว" ชั่วคราว (แฟลกที่ 2 แยกจาก SALES_MODE)
+สวิตช์แยกอีกตัวให้เจ้าของ "ปิดเฉพาะบอทเด้งเมนูตอบมั่ว" ตอนลูกค้าพิมพ์ข้อความทั่วไป (free text) โดย **ไม่ปิดทั้งร้าน** — ออเดอร์/ตรวจสลิป/Contact Us/welcome ยังทำงานครบ. อยู่ในโมดูลเดิม `lib/sales-mode.ts` ใช้ infra tab "System" ร่วมกัน
+- **2 สถานะ:** `ON` = ปกติ (เด้งเมนู fallback) · `OFF` = เงียบเฉพาะ free text. เก็บใน **tab "System"** (key `AUTO_REPLY`) + cache 10 วิของตัวเอง (`arCache`)
+- **ปุ่ม:** การ์ด SYSTEM CONTROL เดิมเพิ่ม 2 ปุ่ม postback `action=autoreply_off` (🔇 ปิดตอบมั่ว) / `action=autoreply_on` (🔊 เปิดตอบมั่ว) — owner-only ซ้ำ → `setAutoReply()` เขียนชีต + อัพเดต cache → ตอบ `buildAutoReplyChangedCard`. `buildSalesControlCard(mode, autoReplyOn)` โชว์สถานะทั้ง 2 แฟลก (รวมเป็น 4 ปุ่ม)
+- **ตอน OFF เงียบแค่ไหน:** gate อยู่ที่ **fallback เท่านั้น** (ทั้ง branch text-else และ sticker/other-else) → ถ้า OFF → `continue` ไม่เด้งเมนู. ส่วน CATALOG/CONTACT keyword, ออเดอร์, ตรวจสลิป, welcome ไม่โดนแตะ
+- **FAIL-SAFE:** default `ON` — OFF เฉพาะเมื่อค่าในชีตเป็น `"OFF"` เป๊ะ ๆ. อ่านพลาด/ไม่มีแถว = ON (บอทตอบปกติ ไม่เงียบค้าง). อ่านพลาดกลางคันคง last-known ไว้
+- **อิสระจาก SALES_MODE:** ปิดตอบมั่วได้โดยร้านยังเปิดขายปกติ (AUTO). MANUAL ยังเงียบทั้งหมดเหมือนเดิม (gate MANUAL มาก่อน fallback)
 
 ---
 

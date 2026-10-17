@@ -66,9 +66,12 @@ import { buildDayPicker, buildConfirmCard } from "@/lib/ship-notify/confirm-card
 import {
   getSalesMode,
   setSalesMode,
+  getAutoReply,
+  setAutoReply,
   SALES_MODE_CODE,
   buildSalesControlCard,
   buildSalesModeChangedCard,
+  buildAutoReplyChangedCard,
   type SalesMode,
 } from "@/lib/sales-mode";
 import { pushAdmin } from "@/lib/daily-pull/notify";
@@ -1257,9 +1260,9 @@ export async function POST(request: NextRequest) {
           event.message.text.trim() === SALES_MODE_CODE
         ) {
           try {
-            const mode = await getSalesMode();
+            const [mode, autoReplyOn] = await Promise.all([getSalesMode(), getAutoReply()]);
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await client.replyMessage({ replyToken, messages: [buildSalesControlCard(mode) as any] });
+            await client.replyMessage({ replyToken, messages: [buildSalesControlCard(mode, autoReplyOn) as any] });
           } catch (e) {
             console.error("[sales-mode] control card failed:", e);
           }
@@ -1276,6 +1279,21 @@ export async function POST(request: NextRequest) {
               await client.replyMessage({ replyToken, messages: [buildSalesModeChangedCard(next) as any] });
             } catch (e) {
               console.error("[sales-mode] toggle failed:", e);
+              await client
+                .replyMessage({ replyToken, messages: [{ type: "text", text: "สลับโหมดไม่สำเร็จ ลองใหม่อีกครั้ง" }] })
+                .catch(() => {});
+            }
+            continue;
+          }
+          // auto-reply (fallback menu) mute/unmute
+          if (a === "autoreply_off" || a === "autoreply_on") {
+            const on = a === "autoreply_on";
+            try {
+              await setAutoReply(on);
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              await client.replyMessage({ replyToken, messages: [buildAutoReplyChangedCard(on) as any] });
+            } catch (e) {
+              console.error("[sales-mode] auto-reply toggle failed:", e);
               await client
                 .replyMessage({ replyToken, messages: [{ type: "text", text: "สลับโหมดไม่สำเร็จ ลองใหม่อีกครั้ง" }] })
                 .catch(() => {});
@@ -1584,7 +1602,20 @@ export async function POST(request: NextRequest) {
           // From Rich Menu — send Contact menu without order ID
           messages = [buildContactMenuNoOrder()];
         } else {
-          // No configured keyword matched → single fallback
+          // No configured keyword matched → single fallback menu. Owner can mute
+          // this catch-all ("auto-reply OFF") from the SYSTEM CONTROL card during
+          // a campaign so the bot doesn't spam the menu at everyone who types.
+          // Fail-safe: a read error behaves as ON (reply normally).
+          let autoReplyOn = true;
+          try {
+            autoReplyOn = await getAutoReply();
+          } catch (e) {
+            console.error("[webhook] auto-reply read failed — replying normally:", e);
+          }
+          if (!autoReplyOn) {
+            console.log("[webhook] Auto-reply muted — no fallback menu");
+            continue;
+          }
           messages = fallbackReply();
         }
       } else if (event.message.type === "image") {
@@ -1597,7 +1628,17 @@ export async function POST(request: NextRequest) {
         const inHandoff = sessionStatus === "paused" || sessionStatus === "active";
         messages = await handleSlipImage(messageId, userId, inHandoff);
       } else {
-        // Sticker, video, audio, etc.
+        // Sticker, video, audio, etc. → fallback menu, unless auto-reply muted.
+        let autoReplyOn = true;
+        try {
+          autoReplyOn = await getAutoReply();
+        } catch (e) {
+          console.error("[webhook] auto-reply read failed — replying normally:", e);
+        }
+        if (!autoReplyOn) {
+          console.log("[webhook] Auto-reply muted — no fallback (sticker/other)");
+          continue;
+        }
         messages = fallbackReply();
       }
 

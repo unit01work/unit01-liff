@@ -27,12 +27,14 @@ export type SalesMode = "AUTO" | "MANUAL";
 const TAB = "System";
 const HEADERS = ["Key", "Value", "Updated At"];
 const KEY = "SALES_MODE";
+const KEY_AUTOREPLY = "AUTO_REPLY";
 
 // Short in-memory cache so the flag read on the webhook / order hot path costs a
 // Sheets round-trip at most once every CACHE_TTL_MS per server instance. A toggle
 // updates the local cache instantly; other instances pick it up within the TTL.
 const CACHE_TTL_MS = 10 * 1000;
 let cache: { mode: SalesMode; at: number } | null = null;
+let arCache: { on: boolean; at: number } | null = null;
 
 /* ── Google Sheets access (own auth, mirrors lib/chat-session.ts) ── */
 function getPrivateKey(): string {
@@ -111,20 +113,72 @@ export async function setSalesMode(mode: SalesMode): Promise<void> {
   cache = { mode, at: Date.now() };
 }
 
+/**
+ * Auto-reply flag. When OFF, the webhook stops sending the catch-all fallback
+ * menu to unrecognised text / stickers (the "bot replies to everything" feature)
+ * — but orders, slip verification, the contact keyword and new-friend welcome
+ * all keep working. Cached for CACHE_TTL_MS.
+ *
+ * FAIL-SAFE: auto-reply is OFF only if the stored value is EXACTLY "OFF".
+ * Anything else (empty, "ON", missing, read error) resolves to ON = normal
+ * replies, so a glitch can never leave the bot accidentally muted for good.
+ */
+export async function getAutoReply(): Promise<boolean> {
+  const nowMs = Date.now();
+  if (arCache && nowMs - arCache.at < CACHE_TTL_MS) return arCache.on;
+  try {
+    const sheet = await getTab();
+    const rows = await sheet.getRows();
+    const row = rows.find((r) => (r.get("Key") || "") === KEY_AUTOREPLY);
+    const raw = (row?.get("Value") || "").toString().trim().toUpperCase();
+    const on = raw !== "OFF"; // default ON
+    arCache = { on, at: nowMs };
+    return on;
+  } catch (err) {
+    console.error("[sales-mode] auto-reply read failed — keeping last known / ON:", err);
+    return arCache?.on ?? true;
+  }
+}
+
+/** Flip the auto-reply flag. Updates the sheet and local cache immediately. */
+export async function setAutoReply(on: boolean): Promise<void> {
+  const sheet = await getTab();
+  const rows = await sheet.getRows();
+  const now = bkkNow();
+  const value = on ? "ON" : "OFF";
+  const row = rows.find((r) => (r.get("Key") || "") === KEY_AUTOREPLY);
+  if (row) {
+    row.set("Value", value);
+    row.set("Updated At", now);
+    await row.save();
+  } else {
+    await sheet.addRow({ Key: KEY_AUTOREPLY, Value: value, "Updated At": now });
+  }
+  arCache = { on, at: Date.now() };
+}
+
 /** Clear the in-memory cache (used by tests). */
 export function _resetSalesModeCache(): void {
   cache = null;
+  arCache = null;
 }
 
 /* ── LINE Flex cards (owner-facing, Thai) ── */
 
-/** The control card: shows current status + two toggle buttons. */
+/**
+ * The control card: shows current status + toggle buttons for BOTH switches —
+ * (1) the whole system (AUTO/MANUAL) and (2) the auto-reply fallback menu.
+ * `autoReplyOn` defaults to true so older callers keep working.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function buildSalesControlCard(mode: SalesMode): any {
+export function buildSalesControlCard(mode: SalesMode, autoReplyOn: boolean = true): any {
   const isManual = mode === "MANUAL";
   const statusText = isManual ? "ปิดระบบ (แมนนวล)" : "เปิดระบบ (ปกติ)";
   const statusColor = isManual ? "#C44A3A" : "#5B805E";
   const dot = isManual ? "🔴" : "🟢";
+  const arText = autoReplyOn ? "เปิด (ตอบปกติ)" : "ปิด (เงียบ)";
+  const arColor = autoReplyOn ? "#5B805E" : "#C44A3A";
+  const arDot = autoReplyOn ? "🟢" : "🔇";
   return {
     type: "flex",
     altText: `SYSTEM CONTROL — ${statusText}`,
@@ -174,6 +228,56 @@ export function buildSalesControlCard(mode: SalesMode): any {
             color: "#9A9490",
             wrap: true,
           },
+          { type: "separator", color: "#EBE7E4", margin: "md" },
+          { type: "text", text: "ตอบข้อความอัตโนมัติ (เมนูตอบมั่ว)", size: "xxs", color: "#9A9490", margin: "md" },
+          { type: "text", text: `${arDot} ${arText}`, size: "md", weight: "bold", color: arColor, wrap: true },
+          {
+            type: "button",
+            style: "secondary",
+            height: "sm",
+            action: { type: "postback", label: "🔇 ปิดตอบมั่ว", data: "action=autoreply_off", displayText: "ปิดบอทตอบมั่ว" },
+          },
+          {
+            type: "button",
+            style: "secondary",
+            height: "sm",
+            action: { type: "postback", label: "🔊 เปิดตอบมั่ว", data: "action=autoreply_on", displayText: "เปิดบอทตอบมั่ว" },
+          },
+          {
+            type: "text",
+            text: "ปิด = ลูกค้าพิมพ์มั่วๆ บอทไม่เด้งเมนู (แต่ยังสั่งซื้อ/ตรวจสลิป/ติดต่อเราได้)",
+            size: "xxs",
+            color: "#9A9490",
+            wrap: true,
+          },
+        ],
+      },
+    },
+  };
+}
+
+/** Confirmation card shown after the owner toggles the auto-reply switch. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function buildAutoReplyChangedCard(on: boolean): any {
+  const title = on ? "🔊 เปิดบอทตอบอัตโนมัติแล้ว" : "🔇 ปิดบอทตอบมั่วแล้ว";
+  const detail = on
+    ? "ลูกค้าพิมพ์อะไรมาที่บอทไม่รู้จัก บอทจะเด้งเมนูช่วยเหลือให้ตามปกติ"
+    : "ลูกค้าพิมพ์อะไรมั่วๆ บอทจะเงียบ ไม่เด้งเมนู\n• สั่งซื้อผ่านหน้าร้าน = ปกติ\n• ตรวจสลิป = ปกติ\n• พิมพ์ 'ติดต่อเรา' = ยังตอบ\n• เพื่อนใหม่ = ยังได้การ์ดต้อนรับ";
+  const color = on ? "#5B805E" : "#C44A3A";
+  return {
+    type: "flex",
+    altText: title,
+    contents: {
+      type: "bubble",
+      size: "kilo",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        paddingAll: "lg",
+        contents: [
+          { type: "text", text: title, weight: "bold", size: "md", color },
+          { type: "text", text: detail, size: "xs", color: "#555555", wrap: true },
         ],
       },
     },
