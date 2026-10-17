@@ -182,10 +182,16 @@ export async function POST(request: NextRequest) {
           // Payment timeout warning
           await client.pushMessage({
             to: body.lineUserId,
-            messages: [{
-              type: "text",
-              text: "[ ! ] Pay within 10 minutes, or your order is cancelled.\nโอนเงินแล้ว กรุณาส่งสลิปมาในแชทนี้เพื่อยืนยันการชำระเงิน",
-            }],
+            messages: [
+              {
+                type: "text",
+                text: "[ ! ] Pay within 10 minutes, or your order is cancelled.",
+              },
+              {
+                type: "text",
+                text: "โอนเงินแล้ว กรุณาส่งสลิปมาในแชทนี้เพื่อยืนยันการชำระเงิน",
+              },
+            ],
           });
           console.log("Flex Message sent (after response):", orderId);
         } catch (flexErr: unknown) {
