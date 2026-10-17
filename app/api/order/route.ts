@@ -184,7 +184,7 @@ export async function POST(request: NextRequest) {
             to: body.lineUserId,
             messages: [{
               type: "text",
-              text: "[ ! ] Pay within 10 minutes, or your order is cancelled.",
+              text: "[ ! ] Pay within 10 minutes, or your order is cancelled.\nโอนเงินแล้ว กรุณาส่งสลิปมาในแชทนี้เพื่อยืนยันการชำระเงิน",
             }],
           });
           console.log("Flex Message sent (after response):", orderId);

@@ -115,7 +115,7 @@ export async function PUT(
             to: existingOrder["LINE User ID"],
             messages: [{
               type: "text",
-              text: "[ ! ] Pay within 10 minutes, or your order is cancelled.",
+              text: "[ ! ] Pay within 10 minutes, or your order is cancelled.\nโอนเงินแล้ว กรุณาส่งสลิปมาในแชทนี้เพื่อยืนยันการชำระเงิน",
             }],
           });
         } catch (lineErr) {
